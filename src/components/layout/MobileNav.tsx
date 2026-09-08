@@ -5,10 +5,10 @@ import { useWishlist } from '@/context/WishlistContext';
 
 const items = [
   { to: '/', label: 'Главная', icon: Home, end: true },
-  { to: '/catalog', label: 'Каталог', icon: LayoutGrid },
-  { to: '/sell', label: 'Продать', icon: PlusCircle },
-  { to: '/favorites', label: 'Избранное', icon: Heart },
-  { to: '/cart', label: 'Корзина', icon: ShoppingBag },
+  { to: '/catalog', label: 'Каталог', icon: LayoutGrid, end: false },
+  { to: '/sell', label: 'Продать', icon: PlusCircle, end: false },
+  { to: '/favorites', label: 'Избранное', icon: Heart, end: false },
+  { to: '/cart', label: 'Корзина', icon: ShoppingBag, end: false },
 ] as const;
 
 export function MobileNav() {
