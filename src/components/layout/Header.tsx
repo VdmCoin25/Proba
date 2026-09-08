@@ -6,6 +6,7 @@ import { navCategories } from '@/data/categories';
 import { useCart } from '@/context/CartContext';
 import { useWishlist } from '@/context/WishlistContext';
 import { useTheme } from '@/context/ThemeContext';
+import { useAuth } from '@/context/AuthContext';
 import { SearchOverlay } from '@/components/search/SearchOverlay';
 
 export function Header() {
@@ -14,6 +15,7 @@ export function Header() {
   const { count } = useCart();
   const { ids } = useWishlist();
   const { theme, toggleTheme } = useTheme();
+  const { user } = useAuth();
 
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-surface/85 backdrop-blur-md dark:border-line-dark dark:bg-surface-dark/85">
@@ -87,7 +89,7 @@ export function Header() {
             )}
           </Link>
           <Link
-            to="/sell"
+            to={user ? '/account' : '/login'}
             className="hidden h-10 w-10 items-center justify-center rounded-full text-ink-soft transition-colors hover:bg-black/[0.04] hover:text-ink dark:text-ink-darksoft dark:hover:bg-white/[0.06] dark:hover:text-ink-dark md:flex"
             aria-label="Профиль"
           >
@@ -131,6 +133,13 @@ export function Header() {
                   {item.label}
                 </Link>
               ))}
+              <Link
+                to={user ? '/account' : '/login'}
+                onClick={() => setMenuOpen(false)}
+                className="rounded-lg border-t border-line px-2 py-2.5 pt-3.5 text-sm font-medium text-ink dark:border-line-dark dark:text-ink-dark"
+              >
+                {user ? 'Личный кабинет' : 'Войти / Зарегистрироваться'}
+              </Link>
               <div className="mt-1 flex items-center gap-2 border-t border-line px-2 pt-3 dark:border-line-dark">
                 <button
                   onClick={toggleTheme}
