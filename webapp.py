@@ -42,6 +42,12 @@ def check_init_data(init_data: str, token: str, admin_id: int) -> bool:
         return False
 
 
+def load_sections() -> list[dict]:
+    """Готовые темы с ключевыми словами из keywords.json."""
+    path = Path(__file__).with_name("keywords.json")
+    return json.loads(path.read_text("utf-8")) if path.exists() else []
+
+
 def plain(text: str, limit: int = 300) -> str:
     s = htmllib.unescape(re.sub(r"<[^>]+>", "", text or ""))
     return s if len(s) <= limit else s[:limit] + "…"
@@ -212,15 +218,20 @@ def make_app(ctx: dict) -> web.Application:
     # ----- парс -----
     @routes.post("/api/parse")
     async def parse(request):
-        text = (await body(request)).get("text", "")
-        queries = [q.strip() for q in re.split(r"[\n,;]+", text) if len(q.strip()) >= 3]
-        if not queries:
-            raise LoginError("Введите ключевые слова (минимум 3 буквы), каждое с новой строки.")
-        if len(queries) > 500:
-            raise LoginError("Не больше 500 запросов за раз.")
+        b = await body(request)
         if ctx["parser"].busy:
             raise LoginError("Парс уже идёт.")
-        ctx["mailer"].background(ctx["parser"].run(queries))
+        if b.get("all_sections"):
+            jobs = [(sec["topic"], sec["queries"]) for sec in load_sections()]
+        else:
+            topic = (b.get("topic") or "").strip()[:60] or "Без темы"
+            queries = [q.strip() for q in re.split(r"[\n,;]+", b.get("text", "")) if len(q.strip()) >= 3]
+            if not queries:
+                raise LoginError("Введите ключевые слова (минимум 3 буквы), каждое с новой строки.")
+            jobs = [(topic, queries)]
+        if sum(len(q) for _, q in jobs) > 600:
+            raise LoginError("Не больше 600 запросов за раз.")
+        ctx["mailer"].background(ctx["parser"].run(jobs))
         return ok()
 
     @routes.post("/api/parse/stop")
@@ -230,8 +241,7 @@ def make_app(ctx: dict) -> web.Application:
 
     @routes.get("/api/keywords")
     async def keywords(_):
-        path = Path(__file__).with_name("keywords.txt")
-        return web.json_response({"text": path.read_text("utf-8") if path.exists() else ""})
+        return web.json_response({"sections": load_sections()})
 
     @routes.post("/api/parsed/update")
     async def parsed_update(request):
@@ -247,6 +257,9 @@ def make_app(ctx: dict) -> web.Application:
                     have.add(p["link"].lower())
         elif action == "delete":
             d["parsed"] = [p for p in d["parsed"] if p["link"].lower() not in links]
+        elif action == "delete_topic":
+            topic = b.get("topic")
+            d["parsed"] = [p for p in d["parsed"] if (p.get("topic") or "Без темы") != topic]
         elif action == "clear":
             d["parsed"] = []
             d["parse_rejected"] = []

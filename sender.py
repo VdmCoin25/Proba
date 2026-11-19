@@ -476,7 +476,8 @@ class Parser:
         full = await acc.client(GetFullChannelRequest(ch))
         return full.full_chat.participants_count
 
-    async def run(self, queries: list[str]) -> None:
+    async def run(self, jobs: list[tuple[str, list[str]]]) -> None:
+        """jobs — список (тема, запросы). Найденные группы сохраняются с названием темы."""
         from telethon.tl.functions.contacts import SearchRequest
         from telethon.tl.types import Channel
 
@@ -490,10 +491,11 @@ class Parser:
         parsed = d["parsed"]
         seen = {p["link"].lower() for p in parsed} | {c.lower() for c in d["parse_rejected"]}
         self._stop = False
-        self.progress = {"done": 0, "total": len(queries), "found": 0, "checked": 0,
-                         "small": 0, "inactive": 0, "channels": 0}
+        total = sum(len(q) for _, q in jobs)
+        self.progress = {"done": 0, "total": total, "found": 0, "checked": 0,
+                         "small": 0, "inactive": 0, "channels": 0, "topic": jobs[0][0] if jobs else ""}
         pr = self.progress
-        self.log(f"🔎 Парс начат: {len(queries)} запросов, от {min_members} уч., "
+        self.log(f"🔎 Парс начат: {len(jobs)} тем, {total} запросов, от {min_members} уч., "
                  f"активность за {d['parse_active_days']} дн. (аккаунт {acc.name})")
 
         async def guarded(coro):
@@ -511,9 +513,10 @@ class Parser:
             return None
 
         try:
-            for q in queries:
+            for topic, q in [(t, q) for t, qs in jobs for q in qs]:
                 if self._stop:
                     break
+                pr["topic"] = topic
                 try:
                     res = await guarded(lambda: acc.client(SearchRequest(q=q, limit=100)))
                 except Exception as e:  # noqa: BLE001
@@ -551,12 +554,12 @@ class Parser:
                         d["parse_rejected"].append(link)
                         continue
                     parsed.append({"link": link, "title": ch.title, "members": members, "last_ts": last,
-                                   "query": q, "ts": int(time.time())})
+                                   "query": q, "topic": topic, "ts": int(time.time())})
                     new += 1
                     pr["found"] += 1
                 pr["done"] += 1
                 if new:
-                    self.log(f"🔎 «{q}»: подходящих групп {new}")
+                    self.log(f"🔎 [{topic}] «{q}»: подходящих групп {new}")
                 self.db.save()
                 await asyncio.sleep(random.uniform(3, 6))
         finally:

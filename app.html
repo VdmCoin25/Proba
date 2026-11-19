@@ -111,7 +111,7 @@ tg?.ready(); tg?.expand();
 const INIT = tg?.initData || "";
 let S = null;              // последнее состояние с сервера
 let tab = "home";
-let ui = { chatSection: "mailing", parseText: "", parseFilter: "", parseHideAdded: false, chatFilter: "all", selected: new Set(), editPost: null, newPost: false, addAcc: false, chatAdd: "" };
+let ui = { chatSection: "mailing", parseText: "", parseTopic: "", topicView: "", sections: null, parseFilter: "", parseHideAdded: false, chatFilter: "all", selected: new Set(), editPost: null, newPost: false, addAcc: false, chatAdd: "" };
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -290,43 +290,64 @@ const views = {
 
   parsed() {
     const inMailing = new Set(S.chats.map(c => c.link.toLowerCase()));
+    const topicOf = p => p.topic || "Без темы";
+    const topics = {};
+    S.parsed.forEach(p => { topics[topicOf(p)] = (topics[topicOf(p)] || 0) + 1; });
+    if (ui.topicView && !topics[ui.topicView]) ui.topicView = "";
     const q = ui.parseFilter.trim().toLowerCase();
-    let list = [...S.parsed];
+    let list = S.parsed.filter(p => !ui.topicView || topicOf(p) === ui.topicView);
     if (ui.parseHideAdded) list = list.filter(p => !inMailing.has(p.link.toLowerCase()));
     if (q) list = list.filter(p => (p.title + " " + p.link + " " + p.query).toLowerCase().includes(q));
     list.sort((a, b) => (b.members || 0) - (a.members || 0));
-    const sel = ui.selected, pr = S.parsing;
+    const sel = ui.selected, pr = S.parsing, secs = ui.sections || [];
+    const nQ = ui.parseText.split("\n").filter(x => x.trim()).length;
     return `
       <div class="card">
         <b>Поиск групп</b>
-        <p class="hint small">Ключевые слова — каждое с новой строки. Бот найдёт публичные группы без вступления. Каналы отсеиваются.</p>
-        <div class="row" style="margin-bottom:10px">
-          <label class="field grow" style="margin:0"><span>Мин. участников</span>
-            <input id="pf-min" type="number" inputmode="numeric" value="${ui.pfMin ?? S.settings.parse_min_members}"></label>
-          <label class="field grow" style="margin:0"><span>Активность за, дней</span>
-            <input id="pf-days" type="number" inputmode="numeric" value="${ui.pfDays ?? S.settings.parse_active_days}"></label>
-        </div>
-        <textarea id="parse-q" placeholder="реклама берлин&#10;барахолка германия&#10;бартер">${esc(ui.parseText)}</textarea>
-        <div class="row between" style="margin-top:6px">
-          <span class="hint small">${ui.parseText.trim() ? ui.parseText.split("\n").filter(x => x.trim()).length + " запросов" : ""}</span>
-          <a href="#" data-kw style="color:var(--link);font-size:13px;text-decoration:none">📋 Вставить мою базу слов</a>
-        </div>
-        ${pr ? `<button class="block danger" data-pstop style="margin-top:10px">⏹ Остановить поиск</button>
+        <p class="hint small">Бот найдёт публичные группы без вступления и сложит их в папку с названием темы. Каналы отсеиваются.</p>
+        ${pr ? `
+          <div class="small" style="margin-bottom:4px">Тема: <b>${esc(pr.topic)}</b></div>
           <div class="bar"><i style="width:${Math.round(pr.done / Math.max(1, pr.total) * 100)}%"></i></div>
           <div class="hint small" style="margin-top:6px">Запрос ${pr.done} из ${pr.total} · найдено <b>${pr.found}</b> · проверено ${pr.checked}<br>
-            отсеяно: мало участников ${pr.small}, неактивных ${pr.inactive}, каналов ${pr.channels}</div>`
-          : `<button class="block" data-parse style="margin-top:10px">🔎 Искать</button>`}
-        <p class="hint small" style="margin:10px 0 0">Каждая группа проверяется на число участников и дату последнего сообщения, поэтому большой список ищется долго (≈ 30–60 мин на 300 слов). Можно закрыть панель — поиск продолжится.</p>
+            отсеяно: мало участников ${pr.small}, неактивных ${pr.inactive}, каналов ${pr.channels}</div>
+          <button class="block danger" data-pstop style="margin-top:10px">⏹ Остановить поиск</button>
+          <p class="hint small" style="margin:10px 0 0">Можно закрыть панель и Telegram — поиск идёт на сервере.</p>` : `
+          <label class="field"><span>Тема (название папки)</span>
+            <input id="pf-topic" placeholder="Например: Работа Германия" value="${esc(ui.parseTopic)}"></label>
+          <div class="row" style="margin-bottom:10px">
+            <label class="field grow" style="margin:0"><span>Мин. участников</span>
+              <input id="pf-min" type="number" inputmode="numeric" value="${ui.pfMin ?? S.settings.parse_min_members}"></label>
+            <label class="field grow" style="margin:0"><span>Активность за, дней</span>
+              <input id="pf-days" type="number" inputmode="numeric" value="${ui.pfDays ?? S.settings.parse_active_days}"></label>
+          </div>
+          <label class="field" style="margin-bottom:0"><span>Ключевые слова — каждое с новой строки${nQ ? ` (${nQ})` : ""}</span>
+            <textarea id="parse-q" placeholder="работа германия&#10;вакансии германия">${esc(ui.parseText)}</textarea></label>
+          <button class="block" data-parse style="margin-top:10px">🔎 Искать в тему</button>
+          ${secs.length ? `
+            <h2 style="margin:18px 0 8px">Готовые темы из вашей базы</h2>
+            <div class="row" style="flex-wrap:wrap; gap:6px">${secs.map((sc, i) =>
+              `<button class="sm ghost" data-sec="${i}">${esc(sc.topic)} · ${sc.queries.length}</button>`).join("")}</div>
+            <p class="hint small" style="margin:8px 0 10px">Нажмите тему — подставятся её слова, потом «Искать в тему».</p>
+            <button class="block ghost" data-pall>🚀 Искать по всем темам (${secs.length} тем, ${secs.reduce((n, sc) => n + sc.queries.length, 0)} слов)</button>
+            <p class="hint small" style="margin:8px 0 0">Всё сразу займёт около 1–2 часов. Каждая тема попадёт в свою папку.</p>` : ""}`}
       </div>
+      ${Object.keys(topics).length ? `
+        <h2>Папки</h2>
+        <div class="card list">
+          <div class="item" data-topic="" style="cursor:pointer"><span class="grow">${!ui.topicView ? "<b>📂 Все</b>" : "📂 Все"}</span><span class="pill">${S.parsed.length}</span></div>
+          ${Object.entries(topics).map(([t, n]) => `
+            <div class="item" data-topic="${esc(t)}" style="cursor:pointer"><span class="grow ellipsis">${ui.topicView === t ? `<b>📁 Парс тема «${esc(t)}»</b>` : `📁 Парс тема «${esc(t)}»`}</span><span class="pill">${n}</span></div>`).join("")}
+        </div>` : ""}
       ${S.parsed.length ? `
       <input id="parse-filter" placeholder="Фильтр по названию или слову" value="${esc(ui.parseFilter)}" style="margin:4px 0 10px">
       <div class="row between" style="margin:0 4px 10px">
-        <span class="small">Скрыть уже добавленные</span>
+        <span class="small">Скрыть уже добавленные в рассылку</span>
         <label class="switch"><input type="checkbox" id="parse-hide" ${ui.parseHideAdded ? "checked" : ""}><span></span></label>
       </div>` : ""}
       ${sel.size ? `<div class="card row" style="gap:6px; flex-wrap:wrap"><span class="small grow">Выбрано: ${sel.size}</span>
         <button class="sm" data-pbulk="to_mailing">➕ В рассылку</button>
         <button class="sm danger" data-pbulk="delete">Удалить</button><button class="sm ghost" data-bulk="clear">✕</button></div>` : ""}
+      ${S.parsed.length ? `<h2>${ui.topicView ? `Парс тема «${esc(ui.topicView)}»` : "Все найденные"} · ${list.length}</h2>` : ""}
       <div class="card list">${list.length ? list.map(p => {
         const added = inMailing.has(p.link.toLowerCase());
         return `<div class="item">
@@ -334,12 +355,14 @@ const views = {
           <div class="grow" style="min-width:0">
             <div class="ellipsis"><b>${esc(p.title)}</b></div>
             <div class="small"><a href="#" data-open="${esc(p.link)}" style="color:var(--link);text-decoration:none">${esc(p.link)}</a>
-              <span class="hint"> · ${p.members ? p.members.toLocaleString("ru-RU") + " уч." : "? уч."}${p.last_ts ? " · посл. сообщ. " + fmtAgo(p.last_ts) : ""} · «${esc(p.query)}»</span></div>
+              <span class="hint"> · ${p.members ? p.members.toLocaleString("ru-RU") + " уч." : "? уч."}${p.last_ts ? " · посл. сообщ. " + fmtAgo(p.last_ts) : ""}</span></div>
+            <div class="hint small ellipsis">${ui.topicView ? "" : "📁 " + esc(topicOf(p)) + " · "}«${esc(p.query)}»</div>
           </div>
           ${added ? `<span class="pill ok">в рассылке</span>` : `<button class="sm ghost" data-padd="${esc(p.link)}">＋</button>`}
         </div>`;
       }).join("") : `<div class="empty">${S.parsed.length ? "Ничего не подходит под фильтр" : "Здесь появятся найденные группы"}</div>`}</div>
       ${list.length > 1 ? `<button class="block ghost" data-selall style="margin-bottom:8px">Выбрать все показанные (${list.length})</button>` : ""}
+      ${ui.topicView ? `<button class="block danger" data-pdeltopic style="margin-bottom:8px">Удалить папку «${esc(ui.topicView)}»</button>` : ""}
       ${S.parsed.length ? `<button class="block danger" data-pclear>Очистить весь парс</button>` : ""}`;
   },
 
@@ -426,7 +449,9 @@ function wrapSelection(tag) {
 
 // ---------- обработчики ----------
 document.addEventListener("click", async e => {
-  const t = e.target.closest("button, a[data-go], a[data-open], a[data-kw]");
+  const row = e.target.closest("[data-topic]");
+  if (row && !e.target.closest("button, input, a")) { ui.topicView = row.dataset.topic; ui.selected.clear(); render(); return; }
+  const t = e.target.closest("button, a[data-go], a[data-open]");
   if (!t) return;
   const d = t.dataset;
   if (d.tab) { tab = d.tab; ui.selected.clear(); render(); window.scrollTo(0, 0); return; }
@@ -462,22 +487,35 @@ document.addEventListener("click", async e => {
     if (r) { ui.chatAdd = ""; render(); if (r.skipped?.length) alertBox("Пропущены (приватные ссылки не поддерживаются):\n" + r.skipped.join("\n")); }
     return;
   }
-  if (d.section) { ui.chatSection = d.section; ui.selected.clear(); render(); return; }
-  if (d.open) { e.preventDefault(); const u = "https://t.me/" + d.open.slice(1); tg?.openTelegramLink ? tg.openTelegramLink(u) : window.open(u); return; }
-  if ("kw" in d) {
-    e.preventDefault();
-    try { const r = await api("/api/keywords"); ui.parseText = r.text; render(); } catch (err) { alertBox(err.message); }
+  if (d.section) {
+    ui.chatSection = d.section; ui.selected.clear(); render();
+    if (d.section === "parsed" && !ui.sections) {
+      try { ui.sections = (await api("/api/keywords")).sections; render(); } catch (_) {}
+    }
     return;
   }
+  if (d.open) { e.preventDefault(); const u = "https://t.me/" + d.open.slice(1); tg?.openTelegramLink ? tg.openTelegramLink(u) : window.open(u); return; }
+  if (d.sec !== undefined) {
+    const sc = ui.sections[+d.sec];
+    ui.parseTopic = sc.topic; ui.parseText = sc.queries.join("\n"); render(); return;
+  }
   if ("pstop" in d) return act("/api/parse/stop", {});
-  if ("parse" in d) {
-    const text = $("#parse-q").value;
-    if (!text.trim()) return alertBox("Введите ключевые слова.");
+  if ("parse" in d || "pall" in d) {
+    const all = "pall" in d;
+    const text = $("#parse-q").value, topic = $("#pf-topic").value.trim();
+    if (!all && !text.trim()) return alertBox("Введите ключевые слова или выберите готовую тему.");
+    if (!all && !topic) return alertBox("Назовите тему — так будет называться папка с найденными чатами.");
+    if (all && !(await confirmBox("Запустить поиск по всем темам базы? Это займёт 1–2 часа, каждая тема попадёт в свою папку."))) return;
     const s1 = await act("/api/settings", {parse_min_members: +$("#pf-min").value, parse_active_days: +$("#pf-days").value});
     if (!s1) return;
-    const r = await act("/api/parse", {text});
-    if (r) { ui.parseText = ""; render(); }
+    const r = await act("/api/parse", all ? {all_sections: true} : {text, topic});
+    if (r) { ui.parseText = ""; ui.parseTopic = ""; render(); }
     return;
+  }
+  if ("pdeltopic" in d) {
+    if (!(await confirmBox(`Удалить папку «${ui.topicView}» со всеми найденными в ней чатами? Чаты для рассылок не затронутся.`))) return;
+    const topic = ui.topicView; ui.topicView = ""; ui.selected.clear();
+    return act("/api/parsed/update", {action: "delete_topic", topic});
   }
   if (d.padd) return act("/api/parsed/update", {action: "to_mailing", links: [d.padd]});
   if (d.pbulk) {
@@ -541,6 +579,7 @@ document.addEventListener("input", e => {
   const id = e.target.id;
   if (id === "chat-add") ui.chatAdd = e.target.value;
   if (id === "parse-q") ui.parseText = e.target.value;
+  if (id === "pf-topic") ui.parseTopic = e.target.value;
   if (id === "pf-min") ui.pfMin = e.target.value;
   if (id === "pf-days") ui.pfDays = e.target.value;
   if (id === "parse-filter") {
