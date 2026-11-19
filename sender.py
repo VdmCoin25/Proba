@@ -489,7 +489,8 @@ class Parser:
         min_members = d["parse_min_members"]
         cutoff = time.time() - d["parse_active_days"] * 86400
         parsed = d["parsed"]
-        seen = {p["link"].lower() for p in parsed} | {c.lower() for c in d["parse_rejected"]}
+        seen = ({p["link"].lower() for p in parsed} | {c.lower() for c in d["parse_rejected"]}
+                | {c["link"].lower() for c in d["chats"]})  # повторы и уже добавленные в рассылку пропускаем
         self._stop = False
         total = sum(len(q) for _, q in jobs)
         self.progress = {"done": 0, "total": total, "found": 0, "checked": 0,
@@ -523,7 +524,12 @@ class Parser:
                     self.log(f"🔎 «{q}»: {type(e).__name__}", "error")
                     res = None
                 new = 0
-                for ch in (res.chats if res else []):
+                chats_ = res.chats if res else []
+                log.info("parse q=%r: chats=%d groups=%d channels=%d no_username=%d", q, len(chats_),
+                         sum(isinstance(c, Channel) and bool(c.megagroup) for c in chats_),
+                         sum(isinstance(c, Channel) and bool(c.broadcast) for c in chats_),
+                         sum(not getattr(c, "username", None) for c in chats_))
+                for ch in chats_:
                     if self._stop:
                         break
                     if not isinstance(ch, Channel) or not getattr(ch, "username", None):

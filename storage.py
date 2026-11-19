@@ -41,6 +41,12 @@ DEFAULTS = {
 def migrate(data: dict) -> None:
     """Обновляет копию от старой версии бота."""
     data["chats"] = [c if isinstance(c, dict) else {"link": c, "enabled": True} for c in data["chats"]]
+    uniq, seen = [], set()
+    for p in data.get("parsed", []):  # убираем повторы в парсе
+        if p["link"].lower() not in seen:
+            seen.add(p["link"].lower())
+            uniq.append(p)
+    data["parsed"] = uniq
     old = data.pop("message", None)
     if old and not data["posts"]:
         data["posts"].append({"id": "post1", "html": old.get("html", ""), "file_id": old.get("file_id"),
