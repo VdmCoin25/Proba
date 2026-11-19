@@ -70,6 +70,8 @@ def build_state(ctx: dict) -> dict:
         "posts": [{"id": p["id"], "text": plain(p.get("html", "")), "html": p.get("html", ""),
                    "type": p.get("type"), "enabled": p.get("enabled", True)} for p in d["posts"]],
         "login_step": login.step,
+        "parsed": d["parsed"],
+        "parsing": ctx["parser"].progress,
         "logs": list(mailer.logs)[:120],
         "now": int(now),
     }
@@ -200,6 +202,39 @@ def make_app(ctx: dict) -> web.Application:
         if m.lock.locked():
             raise LoginError("Уже идёт рассылка или вступление.")
         m.background(m.join_all(names))
+        return ok()
+
+    # ----- парс -----
+    @routes.post("/api/parse")
+    async def parse(request):
+        text = (await body(request)).get("text", "")
+        queries = [q.strip() for q in re.split(r"[\n,;]+", text) if len(q.strip()) >= 3]
+        if not queries:
+            raise LoginError("Введите ключевые слова (минимум 3 буквы), каждое с новой строки.")
+        if len(queries) > 50:
+            raise LoginError("Не больше 50 запросов за раз.")
+        if ctx["parser"].busy:
+            raise LoginError("Парс уже идёт.")
+        ctx["mailer"].background(ctx["parser"].run(queries))
+        return ok()
+
+    @routes.post("/api/parsed/update")
+    async def parsed_update(request):
+        b = await body(request)
+        links = {x.lower() for x in b.get("links", [])}
+        d = ctx["db"].data
+        action = b.get("action")
+        if action == "to_mailing":
+            have = {c["link"].lower() for c in d["chats"]}
+            for p in d["parsed"]:
+                if p["link"].lower() in links and p["link"].lower() not in have:
+                    d["chats"].append({"link": p["link"], "enabled": True, "title": p.get("title")})
+                    have.add(p["link"].lower())
+        elif action == "delete":
+            d["parsed"] = [p for p in d["parsed"] if p["link"].lower() not in links]
+        elif action == "clear":
+            d["parsed"] = []
+        ctx["db"].save()
         return ok()
 
     # ----- аккаунты -----

@@ -31,6 +31,7 @@ DEFAULTS = {
     "disabled_accounts": [],
     "acc_sent": {},           # {"acc1": 123}
     "stats": {},              # {"sent", "failed", "cycles", "last_cycle"}
+    "parsed": [],             # найденные парсом группы: [{"link", "title", "members", "query", "ts"}]
 }
 
 

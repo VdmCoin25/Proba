@@ -446,6 +446,68 @@ class Mailer:
         await self.report("Вступление завершено:\n" + "\n".join(lines))
 
 
+class Parser:
+    """Поиск публичных групп по ключевым словам (без вступления)."""
+
+    def __init__(self, pool: AccountPool, db, log_fn):
+        self.pool = pool
+        self.db = db
+        self.log = log_fn
+        self.progress: dict | None = None   # {"done", "total", "found"}
+
+    @property
+    def busy(self) -> bool:
+        return self.progress is not None
+
+    async def run(self, queries: list[str]) -> None:
+        from telethon.tl.functions.contacts import SearchRequest
+        from telethon.tl.types import Channel
+
+        acc = self.pool.next_available()
+        if acc is None:
+            self.log("⚠ Для парса нужен хотя бы один включённый аккаунт", "warn")
+            return
+        parsed = self.db.data["parsed"]
+        have = {p["link"].lower() for p in parsed}
+        self.progress = {"done": 0, "total": len(queries), "found": 0}
+        self.log(f"🔎 Парс начат: {len(queries)} запросов (аккаунт {acc.name})")
+        skipped_channels = 0
+        try:
+            for q in queries:
+                try:
+                    res = await acc.client(SearchRequest(q=q, limit=100))
+                except errors.FloodWaitError as e:
+                    self.log(f"🔎 FloodWait {e.seconds} с — парс остановлен, продолжите позже", "warn")
+                    break
+                except Exception as e:  # noqa: BLE001
+                    self.log(f"🔎 «{q}»: {type(e).__name__}", "error")
+                    res = None
+                new = 0
+                for ch in (res.chats if res else []):
+                    if not isinstance(ch, Channel) or not getattr(ch, "username", None):
+                        continue
+                    if ch.broadcast and not ch.megagroup:
+                        skipped_channels += 1  # канал — писать туда нельзя
+                        continue
+                    link = "@" + ch.username
+                    if link.lower() in have:
+                        continue
+                    have.add(link.lower())
+                    parsed.append({"link": link, "title": ch.title, "members": ch.participants_count,
+                                   "query": q, "ts": int(time.time())})
+                    new += 1
+                self.progress["done"] += 1
+                self.progress["found"] += new
+                self.log(f"🔎 «{q}»: новых групп {new}")
+                await asyncio.sleep(random.uniform(3, 6))
+        finally:
+            found = self.progress["found"] if self.progress else 0
+            self.progress = None
+            self.db.save()
+        self.log(f"🔎 Парс завершён: найдено новых групп {found}"
+                 + (f", каналов пропущено {skipped_channels}" if skipped_channels else ""))
+
+
 def new_post(html: str, file_id: str | None = None, mtype: str | None = None, ext: str | None = None) -> dict:
     return {"id": uuid.uuid4().hex[:8], "html": html, "file_id": file_id, "type": mtype, "ext": ext,
             "enabled": True}

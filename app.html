@@ -111,7 +111,7 @@ tg?.ready(); tg?.expand();
 const INIT = tg?.initData || "";
 let S = null;              // последнее состояние с сервера
 let tab = "home";
-let ui = { chatFilter: "all", selected: new Set(), editPost: null, newPost: false, addAcc: false, chatAdd: "" };
+let ui = { chatSection: "mailing", parseText: "", parseFilter: "", parseHideAdded: false, chatFilter: "all", selected: new Set(), editPost: null, newPost: false, addAcc: false, chatAdd: "" };
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -242,6 +242,14 @@ const views = {
   },
 
   chats() {
+    const top = `<div class="seg" style="margin-bottom:12px">
+        <button class="${ui.chatSection === "mailing" ? "on" : ""}" data-section="mailing">Для рассылок ${S.chats.length}</button>
+        <button class="${ui.chatSection === "parsed" ? "on" : ""}" data-section="parsed">Все чаты парса ${S.parsed.length}</button>
+      </div>`;
+    return top + (ui.chatSection === "parsed" ? views.parsed() : views.mailing());
+  },
+
+  mailing() {
     const all = S.chats;
     const errors = all.filter(c => c.last && !c.last.ok);
     const shown = ui.chatFilter === "errors" ? errors : ui.chatFilter === "off" ? all.filter(c => c.enabled === false) : all;
@@ -249,7 +257,7 @@ const views = {
     return `
       <div class="card">
         <b>Добавить чаты</b>
-        <p class="hint small">Ссылки t.me/… или @юзернеймы — через пробел, запятую или с новой строки. Только публичные чаты.</p>
+        <p class="hint small">Ссылки t.me/… или @юзернеймы — через пробел, запятую или с новой строки. Только публичные чаты. Или найдите их во вкладке «Все чаты парса».</p>
         <textarea id="chat-add" placeholder="@reklama_chat&#10;t.me/barter_chat">${esc(ui.chatAdd)}</textarea>
         <button class="block" data-addchats style="margin-top:10px">Добавить</button>
       </div>
@@ -267,11 +275,55 @@ const views = {
           : `<span class="small" style="color:${l.ok ? "var(--ok)" : "var(--danger)"}">${l.ok ? "✓" : "✕"} ${esc(l.text)}</span> <span class="hint small">· ${fmtDate(l.ts)}</span>`;
         return `<div class="item">
           <input type="checkbox" class="chk" data-sel="${esc(c.link)}" ${sel.has(c.link) ? "checked" : ""}>
-          <div class="grow" style="${c.enabled === false ? "opacity:.5" : ""}"><a href="https://t.me/${esc(c.link.slice(1))}" target="_blank" style="color:var(--link);text-decoration:none">${esc(c.link)}</a><div>${res}</div></div>
+          <div class="grow" style="min-width:0;${c.enabled === false ? "opacity:.5" : ""}">
+            ${c.title ? `<div class="ellipsis small"><b>${esc(c.title)}</b></div>` : ""}
+            <a href="#" data-open="${esc(c.link)}" style="color:var(--link);text-decoration:none">${esc(c.link)}</a><div>${res}</div></div>
           <label class="switch"><input type="checkbox" data-chat="${esc(c.link)}" ${c.enabled !== false ? "checked" : ""}><span></span></label>
         </div>`;
       }).join("") : `<div class="empty">${all.length ? "Здесь пусто" : "Чатов пока нет"}</div>`}</div>
       ${shown.length > 1 ? `<button class="block ghost" data-selall>Выбрать все показанные</button>` : ""}`;
+  },
+
+  parsed() {
+    const inMailing = new Set(S.chats.map(c => c.link.toLowerCase()));
+    const q = ui.parseFilter.trim().toLowerCase();
+    let list = [...S.parsed];
+    if (ui.parseHideAdded) list = list.filter(p => !inMailing.has(p.link.toLowerCase()));
+    if (q) list = list.filter(p => (p.title + " " + p.link + " " + p.query).toLowerCase().includes(q));
+    list.sort((a, b) => (b.members || 0) - (a.members || 0));
+    const sel = ui.selected, pr = S.parsing;
+    return `
+      <div class="card">
+        <b>Поиск групп</b>
+        <p class="hint small">Ключевые слова — каждое с новой строки. Бот найдёт публичные группы без вступления в них. Каналы (куда писать нельзя) отсеиваются.</p>
+        <textarea id="parse-q" placeholder="реклама берлин&#10;барахолка германия&#10;бартер">${esc(ui.parseText)}</textarea>
+        <button class="block" data-parse style="margin-top:10px" ${pr ? "disabled" : ""}>${pr ? "Идёт поиск…" : "🔎 Искать"}</button>
+        ${pr ? `<div class="bar"><i style="width:${Math.round(pr.done / Math.max(1, pr.total) * 100)}%"></i></div>
+          <div class="hint small" style="margin-top:6px">Запрос ${pr.done} из ${pr.total} · найдено ${pr.found}</div>` : ""}
+      </div>
+      ${S.parsed.length ? `
+      <input id="parse-filter" placeholder="Фильтр по названию или слову" value="${esc(ui.parseFilter)}" style="margin:4px 0 10px">
+      <div class="row between" style="margin:0 4px 10px">
+        <span class="small">Скрыть уже добавленные</span>
+        <label class="switch"><input type="checkbox" id="parse-hide" ${ui.parseHideAdded ? "checked" : ""}><span></span></label>
+      </div>` : ""}
+      ${sel.size ? `<div class="card row" style="gap:6px; flex-wrap:wrap"><span class="small grow">Выбрано: ${sel.size}</span>
+        <button class="sm" data-pbulk="to_mailing">➕ В рассылку</button>
+        <button class="sm danger" data-pbulk="delete">Удалить</button><button class="sm ghost" data-bulk="clear">✕</button></div>` : ""}
+      <div class="card list">${list.length ? list.map(p => {
+        const added = inMailing.has(p.link.toLowerCase());
+        return `<div class="item">
+          <input type="checkbox" class="chk" data-sel="${esc(p.link)}" ${sel.has(p.link) ? "checked" : ""}>
+          <div class="grow" style="min-width:0">
+            <div class="ellipsis"><b>${esc(p.title)}</b></div>
+            <div class="small"><a href="#" data-open="${esc(p.link)}" style="color:var(--link);text-decoration:none">${esc(p.link)}</a>
+              <span class="hint"> · ${p.members ? p.members.toLocaleString("ru-RU") + " уч." : "? уч."} · «${esc(p.query)}»</span></div>
+          </div>
+          ${added ? `<span class="pill ok">в рассылке</span>` : `<button class="sm ghost" data-padd="${esc(p.link)}">＋</button>`}
+        </div>`;
+      }).join("") : `<div class="empty">${S.parsed.length ? "Ничего не подходит под фильтр" : "Здесь появятся найденные группы"}</div>`}</div>
+      ${list.length > 1 ? `<button class="block ghost" data-selall style="margin-bottom:8px">Выбрать все показанные (${list.length})</button>` : ""}
+      ${S.parsed.length ? `<button class="block danger" data-pclear>Очистить весь парс</button>` : ""}`;
   },
 
   posts() {
@@ -357,7 +409,7 @@ function wrapSelection(tag) {
 
 // ---------- обработчики ----------
 document.addEventListener("click", async e => {
-  const t = e.target.closest("button, a[data-go]");
+  const t = e.target.closest("button, a[data-go], a[data-open]");
   if (!t) return;
   const d = t.dataset;
   if (d.tab) { tab = d.tab; ui.selected.clear(); render(); window.scrollTo(0, 0); return; }
@@ -392,6 +444,26 @@ document.addEventListener("click", async e => {
     const r = await act("/api/chats/add", {text});
     if (r) { ui.chatAdd = ""; render(); if (r.skipped?.length) alertBox("Пропущены (приватные ссылки не поддерживаются):\n" + r.skipped.join("\n")); }
     return;
+  }
+  if (d.section) { ui.chatSection = d.section; ui.selected.clear(); render(); return; }
+  if (d.open) { e.preventDefault(); const u = "https://t.me/" + d.open.slice(1); tg?.openTelegramLink ? tg.openTelegramLink(u) : window.open(u); return; }
+  if ("parse" in d) {
+    const text = $("#parse-q").value;
+    if (!text.trim()) return alertBox("Введите ключевые слова.");
+    const r = await act("/api/parse", {text});
+    if (r) { ui.parseText = ""; render(); }
+    return;
+  }
+  if (d.padd) return act("/api/parsed/update", {action: "to_mailing", links: [d.padd]});
+  if (d.pbulk) {
+    if (d.pbulk === "delete" && !(await confirmBox(`Удалить из парса выбранные (${ui.selected.size})?`))) return;
+    const links = [...ui.selected]; ui.selected.clear();
+    return act("/api/parsed/update", {action: d.pbulk, links}, d.pbulk === "to_mailing" ? `Добавлено в рассылку: ${links.length}` : null);
+  }
+  if ("pclear" in d) {
+    if (!(await confirmBox("Удалить все найденные группы из парса? Чаты для рассылок не затронутся."))) return;
+    ui.selected.clear();
+    return act("/api/parsed/update", {action: "clear"});
   }
   if (d.filter) { ui.chatFilter = d.filter; ui.selected.clear(); render(); return; }
   if (d.bulk) {
@@ -438,8 +510,18 @@ document.addEventListener("change", e => {
   if (d.chat) return act("/api/chats/update", {action: t.checked ? "enable" : "disable", links: [d.chat]});
   if (d.posttoggle) return act("/api/posts/update", {id: d.posttoggle, action: t.checked ? "enable" : "disable"});
   if (d.sel) { t.checked ? ui.selected.add(d.sel) : ui.selected.delete(d.sel); render(); }
+  if (t.id === "parse-hide") { ui.parseHideAdded = t.checked; ui.selected.clear(); render(); }
 });
-document.addEventListener("input", e => { if (e.target.id === "chat-add") ui.chatAdd = e.target.value; });
+document.addEventListener("input", e => {
+  const id = e.target.id;
+  if (id === "chat-add") ui.chatAdd = e.target.value;
+  if (id === "parse-q") ui.parseText = e.target.value;
+  if (id === "parse-filter") {
+    ui.parseFilter = e.target.value;
+    const pos = e.target.selectionStart; render();
+    const f = $("#parse-filter"); f.focus(); f.setSelectionRange(pos, pos);
+  }
+});
 
 refresh();
 setInterval(refresh, 4000);

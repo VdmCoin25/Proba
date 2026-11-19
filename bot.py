@@ -13,7 +13,7 @@ from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup, MenuButto
 from aiohttp import ClientSession
 from dotenv import load_dotenv
 
-from sender import AccountPool, LoginFlow, Mailer, new_post
+from sender import AccountPool, LoginFlow, Mailer, Parser, new_post
 from storage import DATA_DIR, Storage
 from webapp import start_web_server
 
@@ -175,7 +175,8 @@ async def main():
 
     mailer = Mailer(pool, db, notify, fetch_media)
     login = LoginFlow(pool)
-    ctx.update(db=db, pool=pool, mailer=mailer, login=login, ready=True)
+    parser = Parser(pool, db, mailer.log)
+    ctx.update(db=db, pool=pool, mailer=mailer, login=login, parser=parser, ready=True)
     for line in report:
         mailer.log(line, "info" if line.startswith("✔") else "error")
 
