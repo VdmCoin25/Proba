@@ -31,6 +31,9 @@ DEFAULTS = {
     "disabled_accounts": [],
     "acc_sent": {},           # {"acc1": 123}
     "stats": {},              # {"sent", "failed", "cycles", "last_cycle"}
+    "parse_min_members": 100,  # парс: минимум участников
+    "parse_active_days": 90,   # парс: последнее сообщение не старше N дней
+    "parse_rejected": [],      # группы, отсеянные парсом (чтобы не проверять повторно)
     "parsed": [],             # найденные парсом группы: [{"link", "title", "members", "query", "ts"}]
 }
 

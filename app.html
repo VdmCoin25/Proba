@@ -120,6 +120,10 @@ const alertBox = msg => tg?.showAlert ? tg.showAlert(msg) : alert(msg);
 const confirmBox = msg => new Promise(r => tg?.showConfirm ? tg.showConfirm(msg, r) : r(confirm(msg)));
 const fmtTime = ts => new Date(ts * 1000).toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"});
 const fmtDate = ts => new Date(ts * 1000).toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
+function fmtAgo(ts) {
+  const days = Math.floor((Date.now() / 1000 - ts) / 86400);
+  return days <= 0 ? "сегодня" : days === 1 ? "вчера" : `${days} дн. назад`;
+}
 function fmtLeft(sec) {
   if (sec <= 0) return "сейчас";
   const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
@@ -295,11 +299,24 @@ const views = {
     return `
       <div class="card">
         <b>Поиск групп</b>
-        <p class="hint small">Ключевые слова — каждое с новой строки. Бот найдёт публичные группы без вступления в них. Каналы (куда писать нельзя) отсеиваются.</p>
+        <p class="hint small">Ключевые слова — каждое с новой строки. Бот найдёт публичные группы без вступления. Каналы отсеиваются.</p>
+        <div class="row" style="margin-bottom:10px">
+          <label class="field grow" style="margin:0"><span>Мин. участников</span>
+            <input id="pf-min" type="number" inputmode="numeric" value="${ui.pfMin ?? S.settings.parse_min_members}"></label>
+          <label class="field grow" style="margin:0"><span>Активность за, дней</span>
+            <input id="pf-days" type="number" inputmode="numeric" value="${ui.pfDays ?? S.settings.parse_active_days}"></label>
+        </div>
         <textarea id="parse-q" placeholder="реклама берлин&#10;барахолка германия&#10;бартер">${esc(ui.parseText)}</textarea>
-        <button class="block" data-parse style="margin-top:10px" ${pr ? "disabled" : ""}>${pr ? "Идёт поиск…" : "🔎 Искать"}</button>
-        ${pr ? `<div class="bar"><i style="width:${Math.round(pr.done / Math.max(1, pr.total) * 100)}%"></i></div>
-          <div class="hint small" style="margin-top:6px">Запрос ${pr.done} из ${pr.total} · найдено ${pr.found}</div>` : ""}
+        <div class="row between" style="margin-top:6px">
+          <span class="hint small">${ui.parseText.trim() ? ui.parseText.split("\n").filter(x => x.trim()).length + " запросов" : ""}</span>
+          <a href="#" data-kw style="color:var(--link);font-size:13px;text-decoration:none">📋 Вставить мою базу слов</a>
+        </div>
+        ${pr ? `<button class="block danger" data-pstop style="margin-top:10px">⏹ Остановить поиск</button>
+          <div class="bar"><i style="width:${Math.round(pr.done / Math.max(1, pr.total) * 100)}%"></i></div>
+          <div class="hint small" style="margin-top:6px">Запрос ${pr.done} из ${pr.total} · найдено <b>${pr.found}</b> · проверено ${pr.checked}<br>
+            отсеяно: мало участников ${pr.small}, неактивных ${pr.inactive}, каналов ${pr.channels}</div>`
+          : `<button class="block" data-parse style="margin-top:10px">🔎 Искать</button>`}
+        <p class="hint small" style="margin:10px 0 0">Каждая группа проверяется на число участников и дату последнего сообщения, поэтому большой список ищется долго (≈ 30–60 мин на 300 слов). Можно закрыть панель — поиск продолжится.</p>
       </div>
       ${S.parsed.length ? `
       <input id="parse-filter" placeholder="Фильтр по названию или слову" value="${esc(ui.parseFilter)}" style="margin:4px 0 10px">
@@ -317,7 +334,7 @@ const views = {
           <div class="grow" style="min-width:0">
             <div class="ellipsis"><b>${esc(p.title)}</b></div>
             <div class="small"><a href="#" data-open="${esc(p.link)}" style="color:var(--link);text-decoration:none">${esc(p.link)}</a>
-              <span class="hint"> · ${p.members ? p.members.toLocaleString("ru-RU") + " уч." : "? уч."} · «${esc(p.query)}»</span></div>
+              <span class="hint"> · ${p.members ? p.members.toLocaleString("ru-RU") + " уч." : "? уч."}${p.last_ts ? " · посл. сообщ. " + fmtAgo(p.last_ts) : ""} · «${esc(p.query)}»</span></div>
           </div>
           ${added ? `<span class="pill ok">в рассылке</span>` : `<button class="sm ghost" data-padd="${esc(p.link)}">＋</button>`}
         </div>`;
@@ -409,7 +426,7 @@ function wrapSelection(tag) {
 
 // ---------- обработчики ----------
 document.addEventListener("click", async e => {
-  const t = e.target.closest("button, a[data-go], a[data-open]");
+  const t = e.target.closest("button, a[data-go], a[data-open], a[data-kw]");
   if (!t) return;
   const d = t.dataset;
   if (d.tab) { tab = d.tab; ui.selected.clear(); render(); window.scrollTo(0, 0); return; }
@@ -447,9 +464,17 @@ document.addEventListener("click", async e => {
   }
   if (d.section) { ui.chatSection = d.section; ui.selected.clear(); render(); return; }
   if (d.open) { e.preventDefault(); const u = "https://t.me/" + d.open.slice(1); tg?.openTelegramLink ? tg.openTelegramLink(u) : window.open(u); return; }
+  if ("kw" in d) {
+    e.preventDefault();
+    try { const r = await api("/api/keywords"); ui.parseText = r.text; render(); } catch (err) { alertBox(err.message); }
+    return;
+  }
+  if ("pstop" in d) return act("/api/parse/stop", {});
   if ("parse" in d) {
     const text = $("#parse-q").value;
     if (!text.trim()) return alertBox("Введите ключевые слова.");
+    const s1 = await act("/api/settings", {parse_min_members: +$("#pf-min").value, parse_active_days: +$("#pf-days").value});
+    if (!s1) return;
     const r = await act("/api/parse", {text});
     if (r) { ui.parseText = ""; render(); }
     return;
@@ -461,7 +486,7 @@ document.addEventListener("click", async e => {
     return act("/api/parsed/update", {action: d.pbulk, links}, d.pbulk === "to_mailing" ? `Добавлено в рассылку: ${links.length}` : null);
   }
   if ("pclear" in d) {
-    if (!(await confirmBox("Удалить все найденные группы из парса? Чаты для рассылок не затронутся."))) return;
+    if (!(await confirmBox("Удалить все найденные группы из парса? Отсеянные группы тоже забудутся и при следующем поиске проверятся заново. Чаты для рассылок не затронутся."))) return;
     ui.selected.clear();
     return act("/api/parsed/update", {action: "clear"});
   }
@@ -516,6 +541,8 @@ document.addEventListener("input", e => {
   const id = e.target.id;
   if (id === "chat-add") ui.chatAdd = e.target.value;
   if (id === "parse-q") ui.parseText = e.target.value;
+  if (id === "pf-min") ui.pfMin = e.target.value;
+  if (id === "pf-days") ui.pfDays = e.target.value;
   if (id === "parse-filter") {
     ui.parseFilter = e.target.value;
     const pos = e.target.selectionStart; render();

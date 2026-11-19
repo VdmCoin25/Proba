@@ -60,6 +60,7 @@ def build_state(ctx: dict) -> dict:
         "settings": {
             "interval_min": d["interval_min"], "delay_sec": d["delay_sec"], "join_delay": d["join_delay"],
             "post_mode": d.get("post_mode", "rotate"), "notify": d.get("notify", True),
+            "parse_min_members": d["parse_min_members"], "parse_active_days": d["parse_active_days"],
         },
         "accounts": [{
             "name": a.name, "title": a.title, "enabled": pool.is_enabled(a.name),
@@ -153,6 +154,10 @@ def make_app(ctx: dict) -> web.Application:
                 if lo < minimum or hi < lo:
                     raise LoginError(f"Пауза: минимум {minimum} с, и «до» не меньше «от».")
                 d[key] = [lo, hi]
+        if "parse_min_members" in b:
+            d["parse_min_members"] = max(0, int(b["parse_min_members"]))
+        if "parse_active_days" in b:
+            d["parse_active_days"] = max(1, int(b["parse_active_days"]))
         if b.get("post_mode") in ("rotate", "random"):
             d["post_mode"] = b["post_mode"]
         if "notify" in b:
@@ -211,12 +216,22 @@ def make_app(ctx: dict) -> web.Application:
         queries = [q.strip() for q in re.split(r"[\n,;]+", text) if len(q.strip()) >= 3]
         if not queries:
             raise LoginError("Введите ключевые слова (минимум 3 буквы), каждое с новой строки.")
-        if len(queries) > 50:
-            raise LoginError("Не больше 50 запросов за раз.")
+        if len(queries) > 500:
+            raise LoginError("Не больше 500 запросов за раз.")
         if ctx["parser"].busy:
             raise LoginError("Парс уже идёт.")
         ctx["mailer"].background(ctx["parser"].run(queries))
         return ok()
+
+    @routes.post("/api/parse/stop")
+    async def parse_stop(_):
+        ctx["parser"].stop()
+        return ok()
+
+    @routes.get("/api/keywords")
+    async def keywords(_):
+        path = Path(__file__).with_name("keywords.txt")
+        return web.json_response({"text": path.read_text("utf-8") if path.exists() else ""})
 
     @routes.post("/api/parsed/update")
     async def parsed_update(request):
@@ -234,6 +249,7 @@ def make_app(ctx: dict) -> web.Application:
             d["parsed"] = [p for p in d["parsed"] if p["link"].lower() not in links]
         elif action == "clear":
             d["parsed"] = []
+            d["parse_rejected"] = []
         ctx["db"].save()
         return ok()
 
