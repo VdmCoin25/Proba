@@ -243,6 +243,16 @@ def make_app(ctx: dict) -> web.Application:
     async def keywords(_):
         return web.json_response({"sections": load_sections()})
 
+    @routes.post("/api/parsed/export")
+    async def parsed_export(request):
+        topic = (await body(request)).get("topic", "*")
+        entries = [p for p in ctx["db"].data["parsed"] if topic == "*" or (p.get("topic") or "Без темы") == topic]
+        if not entries:
+            raise LoginError("В папке нет чатов.")
+        title = "Все найденные" if topic == "*" else f"Парс тема «{topic}»"
+        await ctx["send_parsed"](entries, f"📄 {title}: {len(entries)} групп")
+        return ok()
+
     @routes.post("/api/parsed/update")
     async def parsed_update(request):
         b = await body(request)

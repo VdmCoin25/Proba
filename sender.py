@@ -453,10 +453,11 @@ class Parser:
     и с последним сообщением не старше parse_active_days дней.
     """
 
-    def __init__(self, pool: AccountPool, db, log_fn):
+    def __init__(self, pool: AccountPool, db, log_fn, on_finish=None):
         self.pool = pool
         self.db = db
         self.log = log_fn
+        self.on_finish = on_finish  # async fn(entries, summary) — отправка .txt в бота
         self.progress: dict | None = None
         self._stop = False
 
@@ -496,6 +497,7 @@ class Parser:
         self.progress = {"done": 0, "total": total, "found": 0, "checked": 0,
                          "small": 0, "inactive": 0, "channels": 0, "topic": jobs[0][0] if jobs else ""}
         pr = self.progress
+        found_now: list[dict] = []
         self.log(f"🔎 Парс начат: {len(jobs)} тем, {total} запросов, от {min_members} уч., "
                  f"активность за {d['parse_active_days']} дн. (аккаунт {acc.name})")
 
@@ -559,8 +561,10 @@ class Parser:
                         pr["inactive"] += 1
                         d["parse_rejected"].append(link)
                         continue
-                    parsed.append({"link": link, "title": ch.title, "members": members, "last_ts": last,
-                                   "query": q, "topic": topic, "ts": int(time.time())})
+                    entry = {"link": link, "title": ch.title, "members": members, "last_ts": last,
+                             "query": q, "topic": topic, "ts": int(time.time())}
+                    parsed.append(entry)
+                    found_now.append(entry)
                     new += 1
                     pr["found"] += 1
                 pr["done"] += 1
@@ -571,9 +575,33 @@ class Parser:
         finally:
             self.progress = None
             self.db.save()
-        self.log(f"🔎 Парс {'остановлен' if self._stop else 'завершён'}: найдено {pr['found']}; "
-                 f"отсеяно — меньше {min_members} уч.: {pr['small']}, неактивных: {pr['inactive']}, "
-                 f"каналов: {pr['channels']}")
+        summary = (f"🔎 Парс {'остановлен' if self._stop else 'завершён'}: найдено {pr['found']}; "
+                   f"отсеяно — меньше {min_members} уч.: {pr['small']}, неактивных: {pr['inactive']}, "
+                   f"каналов: {pr['channels']}")
+        self.log(summary)
+        if self.on_finish:
+            try:
+                await self.on_finish(found_now, summary)
+            except Exception:  # noqa: BLE001
+                log.exception("parse report failed")
+
+
+def parsed_txt(entries: list[dict], title: str) -> str:
+    """Текстовый файл с найденными группами, разложенными по папкам-темам."""
+    by_topic: dict[str, list[dict]] = {}
+    for e in entries:
+        by_topic.setdefault(e.get("topic") or "Без темы", []).append(e)
+    out = [title, time.strftime("%d.%m.%Y %H:%M"), f"Всего групп: {len(entries)}", ""]
+    for topic, items in by_topic.items():
+        items = sorted(items, key=lambda e: -(e.get("members") or 0))
+        out.append(f"=== Парс тема «{topic}» ({len(items)}) ===")
+        for e in items:
+            members = f"{e['members']:,}".replace(",", " ") + " уч." if e.get("members") else "? уч."
+            out.append(f"https://t.me/{e['link'][1:]} — {e.get('title', '')} — {members}")
+        out.append("")
+    out.append("=== Только ссылки (для вставки в «Добавить чаты») ===")
+    out += [f"https://t.me/{e['link'][1:]}" for e in entries]
+    return "\n".join(out) + "\n"
 
 
 def new_post(html: str, file_id: str | None = None, mtype: str | None = None, ext: str | None = None) -> dict:

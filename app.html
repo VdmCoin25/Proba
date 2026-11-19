@@ -350,6 +350,7 @@ const views = {
           <button data-copy="all">📋 Скопировать ${list.length === total ? "все" : "показанные"}</button>
           <button class="ghost" data-toall>➕ Все в рассылку</button>
         </div>
+        <button class="block ghost" data-export style="margin-top:8px">📄 Отправить файлом .txt в чат с ботом</button>
         ${ui.copyText ? `<p class="hint small" style="margin:10px 0 6px">Не получилось скопировать автоматически — выделите текст ниже и скопируйте:</p>
           <textarea readonly id="copy-box" style="min-height:120px">${esc(ui.copyText)}</textarea>` : ""}
       </div>
@@ -538,6 +539,7 @@ document.addEventListener("click", async e => {
     }
     return;
   }
+  if ("export" in d) return act("/api/parsed/export", {topic: ui.folder}, "Файл отправлен в чат с ботом.");
   if ("toall" in d) {
     const links = ui.folderList;
     if (!links.length) return;

@@ -2,18 +2,19 @@ import asyncio
 import logging
 import os
 import re
+import time
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Message,
+from aiogram.types import (BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Message,
                            WebAppInfo)
 from aiohttp import ClientSession
 from dotenv import load_dotenv
 
-from sender import AccountPool, LoginFlow, Mailer, Parser, new_post
+from sender import AccountPool, LoginFlow, Mailer, Parser, new_post, parsed_txt
 from storage import DATA_DIR, Storage
 from webapp import start_web_server
 
@@ -175,7 +176,19 @@ async def main():
 
     mailer = Mailer(pool, db, notify, fetch_media)
     login = LoginFlow(pool)
-    parser = Parser(pool, db, mailer.log)
+    async def send_parsed(entries: list[dict], caption: str) -> None:
+        if not entries:
+            await notify(caption)
+            return
+        text = parsed_txt(entries, "Парс Telegram-групп")
+        name = time.strftime("pars_%Y-%m-%d_%H-%M.txt")
+        await bot.send_document(ADMIN_ID, BufferedInputFile(text.encode("utf-8"), name), caption=caption[:1000])
+
+    async def on_parse_finish(entries: list[dict], summary: str) -> None:
+        await send_parsed(entries, summary)
+
+    ctx["send_parsed"] = send_parsed
+    parser = Parser(pool, db, mailer.log, on_parse_finish)
     ctx.update(db=db, pool=pool, mailer=mailer, login=login, parser=parser, ready=True)
     for line in report:
         mailer.log(line, "info" if line.startswith("✔") else "error")
