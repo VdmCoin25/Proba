@@ -2,7 +2,10 @@ import asyncio
 import logging
 import random
 import time
+import uuid
+from collections import deque
 from dataclasses import dataclass
+
 from telethon import TelegramClient, errors
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest
@@ -12,16 +15,20 @@ log = logging.getLogger("mailer")
 
 def normalize_chat(raw: str) -> str | None:
     """Приводит ссылку/юзернейм к виду @username. Приватные инвайт-ссылки не поддерживаются."""
-    s = raw.strip()
+    s = raw.strip().strip(",;")
     for prefix in ("https://", "http://"):
         if s.startswith(prefix):
             s = s[len(prefix):]
     if s.startswith("t.me/") or s.startswith("telegram.me/"):
         s = s.split("/", 1)[1]
     s = s.split("/")[0].split("?")[0].lstrip("@")
-    if not s or s.startswith("+") or s.lower() == "joinchat":
+    if not s or s.startswith("+") or s.lower() == "joinchat" or len(s) < 4:
         return None
     return "@" + s
+
+
+class LoginError(Exception):
+    """Ошибка входа, текст которой можно показать пользователю."""
 
 
 @dataclass
@@ -30,6 +37,7 @@ class Account:
     client: TelegramClient
     title: str = ""
     busy_until: float = 0.0
+    note: str = ""
 
     @property
     def available(self) -> bool:
@@ -55,6 +63,9 @@ class AccountPool:
         me = await client.get_me()
         return (f"{me.first_name or ''} " + (f"@{me.username}" if me.username else f"+{me.phone}")).strip()
 
+    def is_enabled(self, name: str) -> bool:
+        return name not in self.db.data["disabled_accounts"]
+
     async def load(self) -> list[str]:
         await self.close()
         report = []
@@ -63,7 +74,7 @@ class AccountPool:
             try:
                 await client.connect()
                 if not await client.is_user_authorized():
-                    report.append(f"✖ {name}: сессия недействительна — /delaccount {name} и добавьте заново")
+                    report.append(f"✖ {name}: сессия недействительна — удалите и добавьте заново")
                     await client.disconnect()
                     continue
                 title = await self._title(client)
@@ -93,6 +104,8 @@ class AccountPool:
                 self.accounts.remove(acc)
         self._rr = 0
         del self.db.data["sessions"][name]
+        if name in self.db.data["disabled_accounts"]:
+            self.db.data["disabled_accounts"].remove(name)
         self.db.save()
         return True
 
@@ -108,25 +121,121 @@ class AccountPool:
         self.accounts = []
         self._rr = 0
 
+    def active(self) -> list[Account]:
+        return [a for a in self.accounts if self.is_enabled(a.name)]
+
     def next_available(self, exclude: set[str] = frozenset()) -> Account | None:
         n = len(self.accounts)
         for i in range(n):
             acc = self.accounts[(self._rr + i) % n]
-            if acc.available and acc.name not in exclude:
+            if acc.available and acc.name not in exclude and self.is_enabled(acc.name):
                 self._rr = (self._rr + i + 1) % n
                 return acc
         return None
 
 
+class LoginFlow:
+    """Пошаговый вход в аккаунт: телефон → код → (пароль 2FA). Общий для бота и мини-аппа."""
+
+    def __init__(self, pool: AccountPool):
+        self.pool = pool
+        self.client: TelegramClient | None = None
+        self.phone = self.hash = self.name = None
+        self.step = "idle"  # idle | code | password
+
+    async def cancel(self) -> None:
+        if self.client:
+            await self.client.disconnect()
+        self.client = self.phone = self.hash = self.name = None
+        self.step = "idle"
+
+    async def start(self, phone: str) -> str:
+        await self.cancel()
+        phone = "".join(ch for ch in phone if ch.isdigit() or ch == "+")
+        if not phone.startswith("+"):
+            phone = "+" + phone
+        if any(n == phone for n in self._phones()):
+            raise LoginError("Этот номер уже добавлен.")
+        self.client = self.pool.new_client()
+        try:
+            await self.client.connect()
+            sent = await self.client.send_code_request(phone)
+        except errors.PhoneNumberInvalidError:
+            await self.cancel()
+            raise LoginError("Неверный номер телефона.")
+        except errors.FloodWaitError as e:
+            await self.cancel()
+            raise LoginError(f"Telegram просит подождать {e.seconds} с перед новой попыткой.")
+        except Exception as e:  # noqa: BLE001
+            await self.cancel()
+            raise LoginError(f"Не удалось отправить код: {type(e).__name__}: {e}")
+        self.phone, self.hash, self.name = phone, sent.phone_code_hash, self.pool.free_name()
+        self.step = "code"
+        return self.step
+
+    def _phones(self) -> list[str]:
+        return [a.title.split()[-1] for a in self.pool.accounts]
+
+    async def code(self, code: str) -> str:
+        if self.step != "code":
+            raise LoginError("Сначала введите номер телефона.")
+        code = "".join(ch for ch in code if ch.isdigit())
+        try:
+            await self.client.sign_in(phone=self.phone, code=code, phone_code_hash=self.hash)
+        except errors.SessionPasswordNeededError:
+            self.step = "password"
+            return self.step
+        except (errors.PhoneCodeInvalidError, errors.PhoneCodeEmptyError):
+            raise LoginError("Неверный код, попробуйте ещё раз.")
+        except errors.PhoneCodeExpiredError:
+            await self.cancel()
+            raise LoginError("Код устарел. Начните вход заново.")
+        except Exception as e:  # noqa: BLE001
+            await self.cancel()
+            raise LoginError(f"Вход не удался: {type(e).__name__}: {e}")
+        return await self._finish()
+
+    async def password(self, password: str) -> str:
+        if self.step != "password":
+            raise LoginError("Пароль сейчас не требуется.")
+        try:
+            await self.client.sign_in(password=password.strip())
+        except errors.PasswordHashInvalidError:
+            raise LoginError("Неверный пароль 2FA.")
+        except Exception as e:  # noqa: BLE001
+            await self.cancel()
+            raise LoginError(f"Вход не удался: {type(e).__name__}: {e}")
+        return await self._finish()
+
+    async def _finish(self) -> str:
+        acc = await self.pool.add(self.name, self.client)
+        self.client = None  # клиент теперь принадлежит пулу
+        await self.cancel()
+        self.last_added = acc
+        return "done"
+
+
 class Mailer:
     def __init__(self, pool: AccountPool, db, notify, fetch_media):
-        self.fetch_media = fetch_media  # async fn(msg) -> путь к локальному файлу медиа
         self.pool = pool
         self.db = db
-        self.notify = notify          # async fn(text) — отчёт админу
-        self.lock = asyncio.Lock()    # не даёт двум рассылкам идти одновременно
+        self.notify = notify            # async fn(text) — сообщение админу в бота
+        self.fetch_media = fetch_media  # async fn(post) -> путь к локальному файлу медиа
+        self.lock = asyncio.Lock()      # не даёт двум рассылкам идти одновременно
         self.task: asyncio.Task | None = None
+        self.next_run: float | None = None
+        self.progress: dict | None = None   # {"what": "send"|"join", "done": i, "total": n}
+        self.logs: deque = deque(maxlen=200)
         self._bg: set[asyncio.Task] = set()
+
+    # ---------- журнал ----------
+    def log(self, text: str, level: str = "info") -> None:
+        self.logs.appendleft({"ts": int(time.time()), "text": text, "level": level})
+        log.info(text)
+
+    async def report(self, text: str) -> None:
+        if self.db.data.get("notify", True):
+            await self.notify(text)
 
     # ---------- авто-рассылка ----------
     @property
@@ -136,27 +245,33 @@ class Mailer:
     def start(self) -> None:
         if not self.running:
             self.task = asyncio.create_task(self._loop())
+            self.log("▶️ Авто-рассылка включена")
         self.db.data["running"] = True
         self.db.save()
 
     def stop(self) -> None:
         if self.running:
             self.task.cancel()
+            self.log("⏹ Авто-рассылка остановлена")
         self.task = None
+        self.next_run = None
         self.db.data["running"] = False
         self.db.save()
 
     async def _loop(self) -> None:
         while True:
             try:
-                report = await self.run_cycle()
+                text = await self.run_cycle()
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
                 log.exception("cycle failed")
-                report = f"Ошибка цикла: {type(e).__name__}: {e}"
-            await self.notify(report)
-            await asyncio.sleep(self.db.data["interval_min"] * 60)
+                text = f"Ошибка цикла: {type(e).__name__}: {e}"
+                self.log(text, "error")
+            await self.report(text)
+            wait = self.db.data["interval_min"] * 60
+            self.next_run = time.time() + wait
+            await asyncio.sleep(wait)
 
     def background(self, coro) -> None:
         t = asyncio.create_task(coro)
@@ -165,112 +280,172 @@ class Mailer:
 
     async def send_once(self) -> None:
         if self.lock.locked():
-            await self.notify("Рассылка уже идёт, дождитесь отчёта.")
+            self.log("Круг уже идёт", "warn")
             return
-        await self.notify(await self.run_cycle())
+        await self.report(await self.run_cycle())
+
+    # ---------- посты ----------
+    def _pick_posts(self) -> list[dict]:
+        posts = [p for p in self.db.data["posts"] if p.get("enabled", True)]
+        if not posts:
+            return []
+        if self.db.data.get("post_mode") == "random":
+            return posts
+        idx = self.db.data.get("post_idx", 0) % len(posts)
+        self.db.data["post_idx"] = idx + 1
+        return [posts[idx]]
 
     # ---------- один круг ----------
     async def run_cycle(self) -> str:
         async with self.lock:
-            msg = self.db.data.get("message")
-            chats = list(self.db.data["chats"])
-            if not msg:
-                return "⚠ Пост не задан — /setpost"
+            posts = self._pick_posts()
+            chats = [c for c in self.db.data["chats"] if c.get("enabled", True)]
+            if not posts:
+                self.log("⚠ Нет включённых постов", "warn")
+                return "⚠ Нет включённых постов — добавьте в разделе «Посты»"
             if not chats:
-                return "⚠ Список чатов пуст — /addchats"
-            if not self.pool.accounts:
-                return "⚠ Нет аккаунтов — добавьте сессии и /reload"
+                self.log("⚠ Нет включённых чатов", "warn")
+                return "⚠ Нет включённых чатов"
+            if not self.pool.active():
+                self.log("⚠ Нет включённых аккаунтов", "warn")
+                return "⚠ Нет включённых аккаунтов"
 
-            if msg.get("file_id"):
-                msg = {**msg, "media": await self.fetch_media(msg)}
+            ready = []
+            for p in posts:
+                if p.get("file_id"):
+                    p = {**p, "media": await self.fetch_media(p)}
+                ready.append(p)
+
             lo, hi = self.db.data["delay_sec"]
+            stats = self.db.data["stats"]
             ok, problems = 0, []
-            for i, chat in enumerate(chats):
-                err = await self._send_to_chat(chat, msg)
-                if err is None:
-                    ok += 1
-                else:
-                    problems.append(f"• {chat}: {err}")
-                if i < len(chats) - 1:
-                    await asyncio.sleep(random.uniform(lo, hi))
+            self.progress = {"what": "send", "done": 0, "total": len(chats)}
+            self.log(f"🚀 Круг начат: {len(chats)} чатов")
+            try:
+                for i, chat in enumerate(chats):
+                    post = random.choice(ready)
+                    err, acc = await self._send_to_chat(chat["link"], post)
+                    chat["last"] = {"ok": err is None, "text": err or "отправлено", "ts": int(time.time()), "acc": acc}
+                    if err is None:
+                        ok += 1
+                        stats["sent"] = stats.get("sent", 0) + 1
+                        self.db.data["acc_sent"][acc] = self.db.data["acc_sent"].get(acc, 0) + 1
+                    else:
+                        stats["failed"] = stats.get("failed", 0) + 1
+                        problems.append(f"• {chat['link']}: {err}")
+                        self.log(f"✖ {chat['link']}: {err}", "error")
+                    self.progress["done"] = i + 1
+                    if i < len(chats) - 1:
+                        await asyncio.sleep(random.uniform(lo, hi))
+            finally:
+                self.progress = None
+                stats["cycles"] = stats.get("cycles", 0) + 1
+                stats["last_cycle"] = {"ts": int(time.time()), "ok": ok, "total": len(chats)}
+                self.db.save()
 
+            self.log(f"✅ Круг завершён: {ok}/{len(chats)}")
             text = f"✅ Круг завершён: отправлено {ok}/{len(chats)}."
             if problems:
                 text += "\n\nПроблемы:\n" + "\n".join(problems)
             return text
 
-    async def _send_to_chat(self, chat: str, msg: dict) -> str | None:
+    async def _send_to_chat(self, chat: str, post: dict) -> tuple[str | None, str | None]:
         tried: set[str] = set()
-        last = "все аккаунты на паузе (FloodWait)"
+        last = "все аккаунты на паузе или выключены"
+        last_acc = None
         while True:
             acc = self.pool.next_available(exclude=tried)
             if acc is None:
-                return last
+                return last, last_acc
             tried.add(acc.name)
+            last_acc = acc.name
             try:
-                await self._send(acc, chat, msg)
-                return None
+                await self._send(acc, chat, post)
+                return None, acc.name
             except errors.FloodWaitError as e:
                 # лимит Telegram на аккаунт — ставим его на паузу и берём следующий
                 acc.busy_until = time.time() + e.seconds
-                last = f"{acc.name}: FloodWait {e.seconds}с"
+                acc.note = f"FloodWait {e.seconds} с"
+                last = f"{acc.name}: FloodWait {e.seconds} с"
             except errors.SlowModeWaitError as e:
-                return f"slow mode, ещё {e.seconds}с — пропуск (увеличьте /interval)"
+                return f"slow mode, ещё {e.seconds} с — увеличьте интервал", acc.name
             except errors.UserBannedInChannelError:
                 acc.busy_until = time.time() + 6 * 3600
-                return f"{acc.name}: аккаунт ограничен Telegram (спам-блок), пауза 6 ч — проверьте @SpamBot"
+                acc.note = "спам-блок (проверьте @SpamBot)"
+                return f"{acc.name}: аккаунт ограничен Telegram (спам-блок), пауза 6 ч", acc.name
             except (errors.ChatWriteForbiddenError, errors.ChannelPrivateError, errors.UserNotParticipantError):
-                return f"{acc.name}: нет права писать (не вступил — /join, или бан в чате)"
+                return f"{acc.name}: нет права писать (не вступил или бан в чате)", acc.name
             except (errors.UsernameNotOccupiedError, errors.UsernameInvalidError, ValueError):
-                return "чат не найден"
+                return "чат не найден", acc.name
             except Exception as e:  # noqa: BLE001
-                return f"{acc.name}: {type(e).__name__}: {e}"
+                return f"{acc.name}: {type(e).__name__}: {e}", acc.name
 
     @staticmethod
-    async def _send(acc: Account, chat: str, msg: dict) -> None:
-        if msg.get("media"):
+    async def _send(acc: Account, chat: str, post: dict) -> None:
+        if post.get("media"):
             await acc.client.send_file(
                 chat,
-                msg["media"],
-                caption=msg.get("html") or None,
+                post["media"],
+                caption=post.get("html") or None,
                 parse_mode="html",
-                force_document=msg.get("type") == "document",
+                force_document=post.get("type") == "document",
             )
         else:
-            await acc.client.send_message(chat, msg["html"], parse_mode="html")
+            await acc.client.send_message(chat, post["html"], parse_mode="html")
 
     # ---------- вступление в чаты ----------
-    async def join_all(self) -> None:
-        chats = list(self.db.data["chats"])
-        if not chats or not self.pool.accounts:
-            await self.notify("Нужны и чаты, и аккаунты.")
+    async def join_all(self, names: list[str] | None = None) -> None:
+        if self.lock.locked():
+            self.log("Дождитесь конца текущей задачи", "warn")
             return
-        await self.notify(f"Вступаю в {len(chats)} чатов с {len(self.pool.accounts)} аккаунтов. "
-                          "Это медленно (30–60 с между вступлениями), отчёт придёт в конце.")
-        lines = []
-        for acc in self.pool.accounts:
-            joined = 0
+        async with self.lock:
+            chats = [c["link"] for c in self.db.data["chats"] if c.get("enabled", True)]
+            accounts = [a for a in self.pool.active() if names is None or a.name in names]
+            if not chats or not accounts:
+                self.log("⚠ Для вступления нужны и чаты, и аккаунты", "warn")
+                return
+            lo, hi = self.db.data["join_delay"]
+            self.log(f"🚪 Вступление: {len(accounts)} акк. × {len(chats)} чатов")
+            self.progress = {"what": "join", "done": 0, "total": len(accounts) * len(chats)}
+            lines = []
             try:
-                dialogs = await acc.client.get_dialogs()
-            except Exception as e:  # noqa: BLE001
-                lines.append(f"{acc.name}: не удалось получить диалоги — {e}")
-                continue
-            have = {("@" + d.entity.username).lower() for d in dialogs if getattr(d.entity, "username", None)}
-            for chat in chats:
-                if chat.lower() in have:
-                    continue
-                try:
-                    await acc.client(JoinChannelRequest(chat))
-                    joined += 1
-                except errors.FloodWaitError as e:
-                    acc.busy_until = time.time() + e.seconds
-                    lines.append(f"{acc.name}: FloodWait {e.seconds}с — остановлено")
-                    break
-                except errors.ChannelsTooMuchError:
-                    lines.append(f"{acc.name}: достигнут лимит 500 чатов")
-                    break
-                except Exception as e:  # noqa: BLE001
-                    lines.append(f"{acc.name} → {chat}: {type(e).__name__}")
-                await asyncio.sleep(random.uniform(30, 60))
-            lines.append(f"{acc.name}: новых вступлений {joined}")
-        await self.notify("Вступление завершено:\n" + "\n".join(lines))
+                for acc in accounts:
+                    joined = 0
+                    try:
+                        dialogs = await acc.client.get_dialogs()
+                    except Exception as e:  # noqa: BLE001
+                        lines.append(f"{acc.name}: не удалось получить диалоги — {e}")
+                        self.progress["done"] += len(chats)
+                        continue
+                    have = {("@" + d.entity.username).lower() for d in dialogs
+                            if getattr(d.entity, "username", None)}
+                    for chat in chats:
+                        self.progress["done"] += 1
+                        if chat.lower() in have:
+                            continue
+                        try:
+                            await acc.client(JoinChannelRequest(chat))
+                            joined += 1
+                            self.log(f"➕ {acc.name} вступил в {chat}")
+                        except errors.FloodWaitError as e:
+                            acc.busy_until = time.time() + e.seconds
+                            lines.append(f"{acc.name}: FloodWait {e.seconds} с — остановлено")
+                            self.log(f"{acc.name}: FloodWait {e.seconds} с при вступлении", "warn")
+                            break
+                        except errors.ChannelsTooMuchError:
+                            lines.append(f"{acc.name}: достигнут лимит 500 чатов")
+                            break
+                        except Exception as e:  # noqa: BLE001
+                            lines.append(f"{acc.name} → {chat}: {type(e).__name__}")
+                            self.log(f"{acc.name} → {chat}: {type(e).__name__}", "error")
+                        await asyncio.sleep(random.uniform(lo, hi))
+                    lines.append(f"{acc.name}: новых вступлений {joined}")
+            finally:
+                self.progress = None
+        self.log("🚪 Вступление завершено")
+        await self.report("Вступление завершено:\n" + "\n".join(lines))
+
+
+def new_post(html: str, file_id: str | None = None, mtype: str | None = None, ext: str | None = None) -> dict:
+    return {"id": uuid.uuid4().hex[:8], "html": html, "file_id": file_id, "type": mtype, "ext": ext,
+            "enabled": True}

@@ -18,13 +18,30 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 BACKUP_NAME = "telegrand_backup.json"
 
 DEFAULTS = {
-    "chats": [],            # ["@chat1", "@chat2", ...]
-    "message": None,        # {"html": str, "file_id": str|None, "type": str|None, "ext": str|None}
-    "interval_min": 60,     # пауза между кругами рассылки, минут
-    "delay_sec": [15, 30],  # случайная пауза между чатами, секунд
-    "running": False,       # авто-рассылка включена (восстанавливается после перезапуска)
-    "sessions": {},         # {"acc1": "<Telethon StringSession>"}
+    "chats": [],              # [{"link": "@chat", "enabled": True, "last": {...}}]
+    "posts": [],              # [{"id", "html", "file_id", "type", "ext", "enabled"}]
+    "post_mode": "rotate",    # rotate — по очереди каждый круг, random — случайный пост в каждый чат
+    "post_idx": 0,
+    "interval_min": 60,       # пауза между кругами рассылки, минут
+    "delay_sec": [15, 30],    # случайная пауза между чатами, секунд
+    "join_delay": [30, 60],   # пауза между вступлениями, секунд
+    "running": False,         # авто-рассылка включена (восстанавливается после перезапуска)
+    "notify": True,           # присылать отчёты в бота
+    "sessions": {},           # {"acc1": "<Telethon StringSession>"}
+    "disabled_accounts": [],
+    "acc_sent": {},           # {"acc1": 123}
+    "stats": {},              # {"sent", "failed", "cycles", "last_cycle"}
 }
+
+
+def migrate(data: dict) -> None:
+    """Обновляет копию от старой версии бота."""
+    data["chats"] = [c if isinstance(c, dict) else {"link": c, "enabled": True} for c in data["chats"]]
+    old = data.pop("message", None)
+    if old and not data["posts"]:
+        data["posts"].append({"id": "post1", "html": old.get("html", ""), "file_id": old.get("file_id"),
+                              "type": old.get("type"), "ext": old.get("ext"), "enabled": True})
+
 
 log = logging.getLogger("storage")
 
@@ -47,6 +64,7 @@ class Storage:
             if pm and pm.document and pm.document.file_name == BACKUP_NAME:
                 buf = await bot.download(pm.document)
                 self.data.update(json.loads(buf.read().decode("utf-8")))
+                migrate(self.data)
                 self._backup_msg_id = pm.message_id
                 return "настройки восстановлены из резервной копии"
             return "резервной копии нет — начинаем с чистого листа"

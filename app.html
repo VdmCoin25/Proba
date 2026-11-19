@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Панель рассылки</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-secondary-bg-color, #f1f1f4);
+    --card: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #fff));
+    --text: var(--tg-theme-text-color, #111);
+    --hint: var(--tg-theme-hint-color, #8a8a8e);
+    --accent: var(--tg-theme-button-color, #2481cc);
+    --accent-text: var(--tg-theme-button-text-color, #fff);
+    --link: var(--tg-theme-link-color, #2481cc);
+    --danger: var(--tg-theme-destructive-text-color, #e5484d);
+    --ok: #2fb36b;
+    --warn: #e8a317;
+    --sep: color-mix(in srgb, var(--hint) 22%, transparent);
+    --soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif; }
+  body { padding: 12px 12px calc(84px + env(safe-area-inset-bottom)); }
+  h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--hint); margin: 20px 4px 8px; }
+  .card { background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 10px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .row.between { justify-content: space-between; }
+  .grow { flex: 1; min-width: 0; }
+  .hint { color: var(--hint); font-size: 13px; }
+  .small { font-size: 13px; }
+  .mono { font-variant-numeric: tabular-nums; }
+  .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 11px 14px; cursor: pointer;
+    background: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button.ghost { background: var(--soft); color: var(--link); }
+  button.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+  button.sm { padding: 7px 10px; font-size: 13px; border-radius: 8px; }
+  button.block { width: 100%; }
+  button:disabled { opacity: .45; }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  input, textarea, select { font: inherit; color: var(--text); width: 100%; padding: 11px 12px;
+    border-radius: 10px; border: 1px solid var(--sep); background: var(--bg); outline: none; }
+  textarea { min-height: 110px; resize: vertical; }
+  input:focus, textarea:focus { border-color: var(--accent); }
+  label.field { display: block; margin-bottom: 12px; }
+  label.field > span { display: block; font-size: 13px; color: var(--hint); margin: 0 2px 6px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 99px;
+    font-size: 12px; font-weight: 600; background: var(--soft); color: var(--link); white-space: nowrap; }
+  .pill.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+  .pill.off { background: color-mix(in srgb, var(--hint) 15%, transparent); color: var(--hint); }
+  .pill.bad { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+  .pill.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .stat { background: var(--card); border-radius: 14px; padding: 12px 14px; }
+  .stat b { display: block; font-size: 24px; font-weight: 700; }
+  .bar { height: 6px; border-radius: 3px; background: var(--sep); overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); transition: width .4s; }
+  .list > .item { display: flex; align-items: center; gap: 10px; padding: 11px 0; border-top: 1px solid var(--sep); }
+  .list > .item:first-child { border-top: 0; padding-top: 0; }
+  .list > .item:last-child { padding-bottom: 0; }
+  .log { font-size: 13px; padding: 7px 0; border-top: 1px solid var(--sep); display: flex; gap: 8px; }
+  .log:first-child { border-top: 0; }
+  .log time { color: var(--hint); flex: none; }
+  .log.error { color: var(--danger); } .log.warn { color: var(--warn); }
+  .switch { position: relative; width: 46px; height: 28px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .switch span { position: absolute; inset: 0; border-radius: 99px; background: var(--sep); transition: .2s; }
+  .switch span::after { content: ""; position: absolute; width: 22px; height: 22px; left: 3px; top: 3px;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: .2s; }
+  .switch input:checked + span { background: var(--ok); }
+  .switch input:checked + span::after { transform: translateX(18px); }
+  .chk { width: 22px; height: 22px; flex: none; accent-color: var(--accent); }
+  .seg { display: flex; background: var(--bg); border-radius: 10px; padding: 3px; gap: 3px; }
+  .seg button { flex: 1; background: transparent; color: var(--text); font-weight: 500; padding: 8px; }
+  .seg button.on { background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,.12); font-weight: 600; }
+  nav { position: fixed; left: 0; right: 0; bottom: 0; display: flex; background: var(--card);
+    border-top: 1px solid var(--sep); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); z-index: 5; }
+  nav button { flex: 1; background: none; color: var(--hint); padding: 6px 0; font-size: 11px; font-weight: 500;
+    display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  nav button .ico { font-size: 21px; line-height: 1; filter: grayscale(1); opacity: .7; }
+  nav button.on { color: var(--link); }
+  nav button.on .ico { filter: none; opacity: 1; }
+  .empty { text-align: center; color: var(--hint); padding: 18px 8px; }
+  .post-text { white-space: pre-wrap; word-break: break-word; font-size: 14px; max-height: 140px; overflow: hidden; }
+  .toolbar { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+  .hidden { display: none !important; }
+  .banner { background: color-mix(in srgb, var(--warn) 14%, var(--card)); border-radius: 14px; padding: 12px 14px;
+    margin-bottom: 10px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="banner" class="banner hidden"></div>
+<main id="view"></main>
+
+<nav id="nav">
+  <button data-tab="home" class="on"><span class="ico">🏠</span>Главная</button>
+  <button data-tab="accounts"><span class="ico">👤</span>Аккаунты</button>
+  <button data-tab="chats"><span class="ico">💬</span>Чаты</button>
+  <button data-tab="posts"><span class="ico">📝</span>Посты</button>
+  <button data-tab="settings"><span class="ico">⚙️</span>Настройки</button>
+</nav>
+
+<script>
+const tg = window.Telegram?.WebApp;
+tg?.ready(); tg?.expand();
+const INIT = tg?.initData || "";
+let S = null;              // последнее состояние с сервера
+let tab = "home";
+let ui = { chatFilter: "all", selected: new Set(), editPost: null, newPost: false, addAcc: false, chatAdd: "" };
+
+const $ = (sel, el = document) => el.querySelector(sel);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const haptic = t => tg?.HapticFeedback?.notificationOccurred?.(t);
+const alertBox = msg => tg?.showAlert ? tg.showAlert(msg) : alert(msg);
+const confirmBox = msg => new Promise(r => tg?.showConfirm ? tg.showConfirm(msg, r) : r(confirm(msg)));
+const fmtTime = ts => new Date(ts * 1000).toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"});
+const fmtDate = ts => new Date(ts * 1000).toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
+function fmtLeft(sec) {
+  if (sec <= 0) return "сейчас";
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return h ? `${h} ч ${m} мин` : m ? `${m} мин ${s} с` : `${s} с`;
+}
+
+async function api(path, data) {
+  const res = await fetch(path, {
+    method: data === undefined ? "GET" : "POST",
+    headers: {"Content-Type": "application/json", "X-Init-Data": INIT},
+    body: data === undefined ? undefined : JSON.stringify(data),
+  });
+  let json = {};
+  try { json = await res.json(); } catch (_) {}
+  if (!res.ok) throw new Error(json.error || `Ошибка ${res.status}`);
+  return json;
+}
+
+async function act(path, data, okMsg) {
+  try {
+    S = await api(path, data);
+    haptic("success");
+    if (okMsg) alertBox(okMsg);
+    render();
+    return S;
+  } catch (e) { haptic("error"); alertBox(e.message); }
+}
+
+async function refresh() {
+  try {
+    S = await api("/api/state");
+    $("#banner").classList.add("hidden");
+    const typing = document.activeElement && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName);
+    const editing = tab === "settings" || ui.newPost || ui.editPost || ui.addAcc || S.login_step !== "idle";
+    if (!typing && (!editing || tab === "home")) render();
+  } catch (e) {
+    const b = $("#banner");
+    b.textContent = INIT ? e.message : "Откройте панель через кнопку «Панель» в боте.";
+    b.classList.remove("hidden");
+  }
+}
+
+// ---------- вкладки ----------
+const views = {
+  home() {
+    const st = S.stats || {}, lc = st.last_cycle;
+    const p = S.progress;
+    const pct = p ? Math.round(p.done / Math.max(1, p.total) * 100) : 0;
+    const activeAcc = S.accounts.filter(a => a.enabled).length;
+    const activeChats = S.chats.filter(c => c.enabled !== false).length;
+    const activePosts = S.posts.filter(p => p.enabled).length;
+    const status = S.busy ? `<span class="pill warn"><span class="dot"></span>${p?.what === "join" ? "Вступление" : "Идёт рассылка"}</span>`
+      : S.running ? `<span class="pill ok"><span class="dot"></span>Авто-рассылка</span>`
+      : `<span class="pill off"><span class="dot"></span>Остановлено</span>`;
+    const ready = [
+      [activeAcc, "аккаунтов", "accounts"], [activeChats, "чатов", "chats"], [activePosts, "постов", "posts"],
+    ].filter(([n]) => !n);
+    return `
+      <div class="card">
+        <div class="row between"><b style="font-size:17px">Рассылка</b>${status}</div>
+        ${p ? `<div class="bar"><i style="width:${pct}%"></i></div>
+               <div class="hint small" style="margin-top:6px">${p.what === "join" ? "Вступление" : "Отправка"}: ${p.done} из ${p.total}</div>` : ""}
+        ${S.next_run && !S.busy ? `<div class="hint small" style="margin-top:8px">Следующий круг через ${fmtLeft(S.next_run - S.now)}</div>` : ""}
+        ${ready.length ? `<div class="hint small" style="margin-top:8px">Чтобы начать, добавьте: ${ready.map(([, w, t]) => `<a href="#" data-go="${t}" style="color:var(--link)">${w}</a>`).join(", ")}</div>` : ""}
+        <div class="btns" style="margin-top:14px">
+          ${S.running ? `<button class="danger" data-run="stop">⏹ Остановить</button>`
+                      : `<button data-run="start" ${ready.length ? "disabled" : ""}>▶️ Запустить</button>`}
+          <button class="ghost" data-run="once" ${S.busy || ready.length ? "disabled" : ""}>⚡ Один круг</button>
+        </div>
+        <div class="hint small" style="margin-top:10px">Круг — пост в каждый включённый чат. Авто-рассылка повторяет круг каждые ${S.settings.interval_min} мин.</div>
+      </div>
+      <div class="stats">
+        <div class="stat"><b class="mono">${st.sent || 0}</b><span class="hint small">отправлено</span></div>
+        <div class="stat"><b class="mono">${st.failed || 0}</b><span class="hint small">ошибок</span></div>
+        <div class="stat"><b class="mono">${st.cycles || 0}</b><span class="hint small">кругов</span></div>
+        <div class="stat"><b class="mono">${lc ? `${lc.ok}/${lc.total}` : "—"}</b><span class="hint small">${lc ? "последний, " + fmtTime(lc.ts) : "последний круг"}</span></div>
+      </div>
+      <h2>Журнал</h2>
+      <div class="card">${S.logs.length ? S.logs.map(l => `<div class="log ${l.level}"><time class="mono">${fmtTime(l.ts)}</time><span>${esc(l.text)}</span></div>`).join("")
+        : `<div class="empty">Здесь появятся события</div>`}</div>`;
+  },
+
+  accounts() {
+    const step = S.login_step;
+    const form = (ui.addAcc || step !== "idle") ? `
+      <div class="card">
+        <b>Новый аккаунт</b>
+        ${step === "idle" ? `
+          <p class="hint small">Введите номер в международном формате. Код придёт в Telegram этого аккаунта.</p>
+          <input id="lg-val" type="tel" inputmode="tel" placeholder="+49 170 1234567" autocomplete="off">
+          <div class="btns" style="margin-top:10px"><button class="ghost" data-login="cancel">Отмена</button><button data-login="phone">Получить код</button></div>`
+        : step === "code" ? `
+          <p class="hint small">Введите код из Telegram (сообщение от «Telegram» на этом аккаунте).</p>
+          <input id="lg-val" inputmode="numeric" placeholder="12345" autocomplete="one-time-code">
+          <div class="btns" style="margin-top:10px"><button class="ghost" data-login="cancel">Отмена</button><button data-login="code">Войти</button></div>`
+        : `
+          <p class="hint small">На аккаунте включён облачный пароль (2FA). Введите его.</p>
+          <input id="lg-val" type="password" placeholder="Пароль" autocomplete="off">
+          <div class="btns" style="margin-top:10px"><button class="ghost" data-login="cancel">Отмена</button><button data-login="password">Войти</button></div>`}
+      </div>` : `<button class="block" data-addacc style="margin-bottom:10px">＋ Добавить аккаунт</button>`;
+    const list = S.accounts.length ? S.accounts.map(a => {
+      const st = !a.enabled ? `<span class="pill off">выключен</span>`
+        : a.pause ? `<span class="pill warn">пауза ${fmtLeft(a.pause)}</span>` : `<span class="pill ok">активен</span>`;
+      return `<div class="card">
+        <div class="row"><div class="grow"><b class="ellipsis" style="display:block">${esc(a.title)}</b>
+          <span class="hint small">${esc(a.name)} · отправлено ${a.sent}${a.note ? " · " + esc(a.note) : ""}</span></div>${st}</div>
+        <div class="row" style="margin-top:10px; gap:6px; flex-wrap:wrap">
+          <button class="sm ghost" data-acc="${a.enabled ? "disable" : "enable"}" data-name="${esc(a.name)}">${a.enabled ? "Выключить" : "Включить"}</button>
+          <button class="sm ghost" data-joinone="${esc(a.name)}" ${S.busy ? "disabled" : ""}>Вступить в чаты</button>
+          ${a.pause ? `<button class="sm ghost" data-acc="unpause" data-name="${esc(a.name)}">Снять паузу</button>` : ""}
+          <button class="sm danger" data-acc="delete" data-name="${esc(a.name)}">Удалить</button>
+        </div></div>`;
+    }).join("") : `<div class="card empty">Аккаунтов пока нет</div>`;
+    const broken = S.broken_accounts.length ? `<div class="card"><b>Не подключились</b>
+      ${S.broken_accounts.map(n => `<div class="row between" style="margin-top:8px"><span>${esc(n)}</span><button class="sm danger" data-acc="delete" data-name="${esc(n)}">Удалить</button></div>`).join("")}
+      <div class="hint small" style="margin-top:8px">Сессия недействительна — удалите и добавьте заново.</div></div>` : "";
+    return `${form}${list}${broken}
+      ${S.accounts.length && S.chats.length ? `<button class="block ghost" data-joinall ${S.busy ? "disabled" : ""}>🚪 Вступить во все чаты всеми аккаунтами</button>
+      <p class="hint small" style="margin:8px 4px">Аккаунты вступают по одному чату раз в ${S.settings.join_delay[0]}–${S.settings.join_delay[1]} с, чтобы Telegram не ограничил их. Это долго — прогресс на главной.</p>` : ""}`;
+  },
+
+  chats() {
+    const all = S.chats;
+    const errors = all.filter(c => c.last && !c.last.ok);
+    const shown = ui.chatFilter === "errors" ? errors : ui.chatFilter === "off" ? all.filter(c => c.enabled === false) : all;
+    const sel = ui.selected;
+    return `
+      <div class="card">
+        <b>Добавить чаты</b>
+        <p class="hint small">Ссылки t.me/… или @юзернеймы — через пробел, запятую или с новой строки. Только публичные чаты.</p>
+        <textarea id="chat-add" placeholder="@reklama_chat&#10;t.me/barter_chat">${esc(ui.chatAdd)}</textarea>
+        <button class="block" data-addchats style="margin-top:10px">Добавить</button>
+      </div>
+      <div class="seg" style="margin:14px 0 10px">
+        <button class="${ui.chatFilter === "all" ? "on" : ""}" data-filter="all">Все ${all.length}</button>
+        <button class="${ui.chatFilter === "errors" ? "on" : ""}" data-filter="errors">Ошибки ${errors.length}</button>
+        <button class="${ui.chatFilter === "off" ? "on" : ""}" data-filter="off">Выкл. ${all.filter(c => c.enabled === false).length}</button>
+      </div>
+      ${sel.size ? `<div class="card row" style="gap:6px; flex-wrap:wrap"><span class="small grow">Выбрано: ${sel.size}</span>
+        <button class="sm ghost" data-bulk="enable">Вкл</button><button class="sm ghost" data-bulk="disable">Выкл</button>
+        <button class="sm danger" data-bulk="delete">Удалить</button><button class="sm ghost" data-bulk="clear">✕</button></div>` : ""}
+      <div class="card list">${shown.length ? shown.map(c => {
+        const l = c.last;
+        const res = !l ? `<span class="hint small">ещё не отправляли</span>`
+          : `<span class="small" style="color:${l.ok ? "var(--ok)" : "var(--danger)"}">${l.ok ? "✓" : "✕"} ${esc(l.text)}</span> <span class="hint small">· ${fmtDate(l.ts)}</span>`;
+        return `<div class="item">
+          <input type="checkbox" class="chk" data-sel="${esc(c.link)}" ${sel.has(c.link) ? "checked" : ""}>
+          <div class="grow" style="${c.enabled === false ? "opacity:.5" : ""}"><a href="https://t.me/${esc(c.link.slice(1))}" target="_blank" style="color:var(--link);text-decoration:none">${esc(c.link)}</a><div>${res}</div></div>
+          <label class="switch"><input type="checkbox" data-chat="${esc(c.link)}" ${c.enabled !== false ? "checked" : ""}><span></span></label>
+        </div>`;
+      }).join("") : `<div class="empty">${all.length ? "Здесь пусто" : "Чатов пока нет"}</div>`}</div>
+      ${shown.length > 1 ? `<button class="block ghost" data-selall>Выбрать все показанные</button>` : ""}`;
+  },
+
+  posts() {
+    const editor = (ui.newPost || ui.editPost) ? `
+      <div class="card">
+        <b>${ui.editPost ? "Изменить текст" : "Новый текстовый пост"}</b>
+        <p class="hint small">Форматирование: выделите текст и нажмите кнопку. Поддерживаются эмодзи и ссылки.</p>
+        <div class="toolbar">
+          <button class="sm ghost" data-fmt="b"><b>Ж</b></button><button class="sm ghost" data-fmt="i"><i>К</i></button>
+          <button class="sm ghost" data-fmt="u"><u>Ч</u></button><button class="sm ghost" data-fmt="s"><s>З</s></button>
+          <button class="sm ghost" data-fmt="code">code</button><button class="sm ghost" data-fmt="a">🔗 Ссылка</button>
+        </div>
+        <div class="hint small" style="margin:-2px 2px 8px">Для ссылки впишите адрес вместо https:// в кавычках.</div>
+        <textarea id="post-html" style="min-height:180px">${esc(ui.editPost ? (S.posts.find(p => p.id === ui.editPost)?.html || "") : "")}</textarea>
+        <div class="btns" style="margin-top:10px"><button class="ghost" data-postcancel>Отмена</button><button data-postsave>Сохранить</button></div>
+      </div>` : `
+      <div class="btns" style="margin-bottom:10px">
+        <button data-newpost>＋ Текстовый пост</button>
+        <button class="ghost" data-mediapost>🖼 С фото/видео</button>
+      </div>`;
+    const list = S.posts.length ? S.posts.map((p, i) => `
+      <div class="card" style="${p.enabled ? "" : "opacity:.55"}">
+        <div class="row between" style="margin-bottom:8px">
+          <span class="pill">${["Пост " + (i + 1), {photo: "📷 фото", video: "🎬 видео", animation: "GIF", document: "📎 файл"}[p.type]].filter(Boolean).join(" · ")}</span>
+          <label class="switch"><input type="checkbox" data-posttoggle="${p.id}" ${p.enabled ? "checked" : ""}><span></span></label>
+        </div>
+        <div class="post-text">${esc(p.text) || `<span class="hint">без текста</span>`}</div>
+        <div class="row" style="margin-top:10px; gap:6px; flex-wrap:wrap">
+          <button class="sm ghost" data-preview="${p.id}">👁 Предпросмотр в боте</button>
+          <button class="sm ghost" data-edit="${p.id}">✏️ Текст</button>
+          <button class="sm danger" data-delpost="${p.id}">Удалить</button>
+        </div>
+      </div>`).join("") : `<div class="card empty">Постов пока нет</div>`;
+    return `${editor}
+      <h2>Если постов несколько</h2>
+      <div class="seg">
+        <button class="${S.settings.post_mode === "rotate" ? "on" : ""}" data-mode="rotate">По очереди</button>
+        <button class="${S.settings.post_mode === "random" ? "on" : ""}" data-mode="random">Случайно</button>
+      </div>
+      <p class="hint small" style="margin:8px 4px 0">${S.settings.post_mode === "rotate" ? "Каждый круг — следующий пост во все чаты." : "В каждый чат уходит случайный пост — тексты меньше повторяются."}</p>
+      <h2>Посты</h2>${list}`;
+  },
+
+  settings() {
+    const s = S.settings;
+    return `
+      <div class="card">
+        <label class="field"><span>Интервал между кругами, минут</span>
+          <input id="st-int" type="number" inputmode="numeric" min="5" value="${s.interval_min}"></label>
+        <span class="hint small" style="display:block;margin:0 2px 6px">Пауза между чатами в круге, секунд</span>
+        <div class="row" style="margin-bottom:12px"><input id="st-d1" type="number" inputmode="numeric" value="${s.delay_sec[0]}"><span class="hint">—</span><input id="st-d2" type="number" inputmode="numeric" value="${s.delay_sec[1]}"></div>
+        <span class="hint small" style="display:block;margin:0 2px 6px">Пауза между вступлениями в чаты, секунд</span>
+        <div class="row" style="margin-bottom:12px"><input id="st-j1" type="number" inputmode="numeric" value="${s.join_delay[0]}"><span class="hint">—</span><input id="st-j2" type="number" inputmode="numeric" value="${s.join_delay[1]}"></div>
+        <div class="row between" style="margin-bottom:14px"><span>Отчёты о кругах в бота</span>
+          <label class="switch"><input id="st-notify" type="checkbox" ${s.notify ? "checked" : ""}><span></span></label></div>
+        <button class="block" data-savesettings>Сохранить</button>
+      </div>
+      <h2>Чтобы аккаунты не банили</h2>
+      <div class="card small" style="line-height:1.5">
+        • Пишите только в чаты, где реклама разрешена, и соблюдайте их правила.<br>
+        • Интервал — не меньше slow mode в чатах (обычно 30–60+ минут).<br>
+        • Новые аккаунты сначала «прогрейте» несколько дней.<br>
+        • При спам-блоке проверьте аккаунт в @SpamBot.<br>
+        • Несколько разных постов в режиме «Случайно» выглядят естественнее.
+      </div>`;
+  },
+};
+
+function render() {
+  if (!S) return;
+  $("#view").innerHTML = views[tab]();
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
+}
+
+function wrapSelection(tag) {
+  const ta = $("#post-html"); if (!ta) return;
+  const a = ta.selectionStart, b = ta.selectionEnd, sel = ta.value.slice(a, b) || "текст";
+  let open = `<${tag}>`, close = `</${tag}>`;
+  if (tag === "a") { open = `<a href="https://">`; close = "</a>"; }
+  ta.setRangeText(open + sel + close, a, b, "end");
+  ta.focus();
+}
+
+// ---------- обработчики ----------
+document.addEventListener("click", async e => {
+  const t = e.target.closest("button, a[data-go]");
+  if (!t) return;
+  const d = t.dataset;
+  if (d.tab) { tab = d.tab; ui.selected.clear(); render(); window.scrollTo(0, 0); return; }
+  if (d.go) { e.preventDefault(); tab = d.go; render(); return; }
+  if (d.run) {
+    if (d.run === "stop" && !(await confirmBox("Остановить авто-рассылку?"))) return;
+    return act("/api/run", {action: d.run}, d.run === "once" ? "Круг запущен. Прогресс — на главной." : null);
+  }
+  if ("addacc" in d) { ui.addAcc = true; render(); $("#lg-val")?.focus(); return; }
+  if (d.login) {
+    if (d.login === "cancel") { ui.addAcc = false; return act("/api/login", {step: "cancel"}); }
+    const v = $("#lg-val")?.value.trim();
+    if (!v) return alertBox("Заполните поле.");
+    t.disabled = true; t.textContent = "…";
+    const r = await act("/api/login", {step: d.login, value: v});
+    if (r && r.login_step === "idle") { ui.addAcc = false; render(); alertBox("✅ Аккаунт добавлен"); }
+    else { render(); $("#lg-val")?.focus(); }
+    return;
+  }
+  if (d.acc) {
+    if (d.acc === "delete" && !(await confirmBox(`Удалить ${d.name}? Сессия будет завершена.`))) return;
+    return act("/api/accounts/update", {name: d.name, action: d.acc});
+  }
+  if (d.joinone) return act("/api/join", {accounts: [d.joinone]}, "Вступление запущено. Прогресс — на главной.");
+  if ("joinall" in d) {
+    if (!(await confirmBox("Все аккаунты вступят во все включённые чаты. Это может занять много времени. Начать?"))) return;
+    return act("/api/join", {}, "Вступление запущено. Прогресс — на главной.");
+  }
+  if ("addchats" in d) {
+    const text = $("#chat-add").value;
+    if (!text.trim()) return;
+    const r = await act("/api/chats/add", {text});
+    if (r) { ui.chatAdd = ""; render(); if (r.skipped?.length) alertBox("Пропущены (приватные ссылки не поддерживаются):\n" + r.skipped.join("\n")); }
+    return;
+  }
+  if (d.filter) { ui.chatFilter = d.filter; ui.selected.clear(); render(); return; }
+  if (d.bulk) {
+    if (d.bulk === "clear") { ui.selected.clear(); render(); return; }
+    if (d.bulk === "delete" && !(await confirmBox(`Удалить выбранные чаты (${ui.selected.size})?`))) return;
+    const links = [...ui.selected]; ui.selected.clear();
+    return act("/api/chats/update", {action: d.bulk, links});
+  }
+  if ("selall" in d) {
+    document.querySelectorAll("[data-sel]").forEach(c => ui.selected.add(c.dataset.sel)); render(); return;
+  }
+  if ("newpost" in d) { ui.newPost = true; ui.editPost = null; render(); $("#post-html")?.focus(); return; }
+  if (d.edit) { ui.editPost = d.edit; ui.newPost = false; render(); window.scrollTo(0, 0); return; }
+  if ("postcancel" in d) { ui.newPost = false; ui.editPost = null; render(); return; }
+  if ("postsave" in d) {
+    const r = await act("/api/posts/save", {id: ui.editPost, html: $("#post-html").value});
+    if (r) { ui.newPost = false; ui.editPost = null; render(); }
+    return;
+  }
+  if (d.fmt) { wrapSelection(d.fmt); return; }
+  if ("mediapost" in d) {
+    const r = await act("/api/posts/media", {});
+    if (r) tg?.showAlert ? tg.showAlert("Пришлите пост с фото/видео в чат с ботом.", () => tg.close()) : alert("Пришлите пост в чат с ботом.");
+    return;
+  }
+  if (d.preview) return act("/api/posts/update", {id: d.preview, action: "preview"}, "Отправил предпросмотр в чат с ботом.");
+  if (d.delpost) {
+    if (!(await confirmBox("Удалить пост?"))) return;
+    return act("/api/posts/update", {id: d.delpost, action: "delete"});
+  }
+  if (d.mode) return act("/api/settings", {post_mode: d.mode});
+  if ("savesettings" in d) {
+    return act("/api/settings", {
+      interval_min: +$("#st-int").value,
+      delay_sec: [+$("#st-d1").value, +$("#st-d2").value],
+      join_delay: [+$("#st-j1").value, +$("#st-j2").value],
+      notify: $("#st-notify").checked,
+    }, "Сохранено");
+  }
+});
+
+document.addEventListener("change", e => {
+  const t = e.target, d = t.dataset;
+  if (d.chat) return act("/api/chats/update", {action: t.checked ? "enable" : "disable", links: [d.chat]});
+  if (d.posttoggle) return act("/api/posts/update", {id: d.posttoggle, action: t.checked ? "enable" : "disable"});
+  if (d.sel) { t.checked ? ui.selected.add(d.sel) : ui.selected.delete(d.sel); render(); }
+});
+document.addEventListener("input", e => { if (e.target.id === "chat-add") ui.chatAdd = e.target.value; });
+
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>
