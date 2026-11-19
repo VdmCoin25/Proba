@@ -1,0 +1,86 @@
+"""Хранилище настроек.
+
+На бесплатном Render диск стирается при каждом перезапуске, поэтому всё состояние
+(чаты, пост, сессии аккаунтов) хранится в JSON-файле, закреплённом в вашем чате с ботом.
+При старте бот скачивает закреплённый файл, при каждом изменении — отправляет и закрепляет новый.
+"""
+import asyncio
+import copy
+import json
+import logging
+import os
+from pathlib import Path
+
+from aiogram import Bot
+from aiogram.types import BufferedInputFile
+
+DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
+BACKUP_NAME = "telegrand_backup.json"
+
+DEFAULTS = {
+    "chats": [],            # ["@chat1", "@chat2", ...]
+    "message": None,        # {"html": str, "file_id": str|None, "type": str|None, "ext": str|None}
+    "interval_min": 60,     # пауза между кругами рассылки, минут
+    "delay_sec": [15, 30],  # случайная пауза между чатами, секунд
+    "running": False,       # авто-рассылка включена (восстанавливается после перезапуска)
+    "sessions": {},         # {"acc1": "<Telethon StringSession>"}
+}
+
+log = logging.getLogger("storage")
+
+
+class Storage:
+    def __init__(self):
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        self.data = copy.deepcopy(DEFAULTS)
+        self.bot: Bot | None = None
+        self.chat_id: int | None = None
+        self._backup_msg_id: int | None = None
+        self._flush_task: asyncio.Task | None = None
+
+    async def restore(self, bot: Bot, chat_id: int) -> str:
+        """Загружает состояние из закреплённого файла в чате с ботом."""
+        self.bot, self.chat_id = bot, chat_id
+        try:
+            chat = await bot.get_chat(chat_id)
+            pm = chat.pinned_message
+            if pm and pm.document and pm.document.file_name == BACKUP_NAME:
+                buf = await bot.download(pm.document)
+                self.data.update(json.loads(buf.read().decode("utf-8")))
+                self._backup_msg_id = pm.message_id
+                return "настройки восстановлены из резервной копии"
+            return "резервной копии нет — начинаем с чистого листа"
+        except Exception as e:  # noqa: BLE001
+            log.exception("restore failed")
+            return f"не удалось прочитать резервную копию: {e}"
+
+    def save(self) -> None:
+        """Сохраняет состояние (с задержкой 3 с, чтобы склеить серию изменений)."""
+        if self._flush_task is None or self._flush_task.done():
+            try:
+                self._flush_task = asyncio.get_running_loop().create_task(self._flush())
+            except RuntimeError:
+                pass
+
+    async def _flush(self) -> None:
+        await asyncio.sleep(3)
+        if not self.bot:
+            return
+        raw = json.dumps(self.data, ensure_ascii=False, indent=1).encode("utf-8")
+        try:
+            sent = await self.bot.send_document(
+                self.chat_id,
+                BufferedInputFile(raw, BACKUP_NAME),
+                caption="💾 Резервная копия настроек и аккаунтов. Не удаляйте и не открепляйте. "
+                        "Никому не пересылайте — в ней доступ к аккаунтам.",
+                disable_notification=True,
+            )
+            await self.bot.pin_chat_message(self.chat_id, sent.message_id, disable_notification=True)
+            old, self._backup_msg_id = self._backup_msg_id, sent.message_id
+            if old:
+                try:
+                    await self.bot.delete_message(self.chat_id, old)
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception:  # noqa: BLE001
+            log.exception("backup failed")

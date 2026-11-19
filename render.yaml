@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: telegrand-bot
+    runtime: python
+    region: frankfurt
+    plan: free
+    branch: telegrand
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_ID
+        sync: false
