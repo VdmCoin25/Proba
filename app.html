@@ -300,11 +300,16 @@ const views = {
       <div class="card">
         <b>Поиск групп</b>
         <p class="hint small">Бот найдёт публичные группы без вступления и сложит их в папку с названием темы. Каналы и повторы отсеиваются.</p>
-        ${pr ? `
+        ${pr && pr.mode === "recheck" ? `
+          <div class="small" style="margin-bottom:4px"><b>🛡 Проверка прав в найденных группах</b></div>
+          <div class="bar"><i style="width:${Math.round(pr.done / Math.max(1, pr.total) * 100)}%"></i></div>
+          <div class="hint small" style="margin-top:6px">Проверено ${pr.done} из ${pr.total} · убрано (пишут только админы) <b>${pr.closed}</b></div>
+          <button class="block danger" data-pstop style="margin-top:10px">⏹ Остановить</button>
+          <p class="hint small" style="margin:10px 0 0">Можно закрыть панель — проверка идёт на сервере.</p>` : pr ? `
           <div class="small" style="margin-bottom:4px">Тема: <b>${esc(pr.topic)}</b></div>
           <div class="bar"><i style="width:${Math.round(pr.done / Math.max(1, pr.total) * 100)}%"></i></div>
           <div class="hint small" style="margin-top:6px">Запрос ${pr.done} из ${pr.total} · найдено <b>${pr.found}</b> · проверено ${pr.checked}<br>
-            отсеяно: мало участников ${pr.small}, неактивных ${pr.inactive}, каналов ${pr.channels}</div>
+            отсеяно: мало участников ${pr.small}, неактивных ${pr.inactive}, каналов ${pr.channels}, только для админов ${pr.closed || 0}</div>
           <button class="block danger" data-pstop style="margin-top:10px">⏹ Остановить поиск</button>
           <p class="hint small" style="margin:10px 0 0">Можно закрыть панель и Telegram — поиск идёт на сервере.</p>` : `
           <label class="field"><span>Тема (название папки)</span>
@@ -326,6 +331,8 @@ const views = {
             <div class="item" data-folder="${esc(t)}" style="cursor:pointer"><span class="grow ellipsis">📁 Парс тема «${esc(t)}»</span><span class="pill">${n}</span><span class="hint">›</span></div>`).join("")}
           <div class="item" data-folder="*" style="cursor:pointer"><span class="grow">📂 Все найденные</span><span class="pill">${S.parsed.length}</span><span class="hint">›</span></div>
         </div>
+        ${pr ? "" : `<button class="block ghost" data-precheck style="margin-top:4px">🛡 Убрать группы, где пишут только админы</button>
+        <p class="hint small" style="margin:6px 4px 10px">Проверит все папки и «Чаты для рассылок» без вступления. Такие группы удалятся из папок, а в рассылке выключатся.</p>`}
         <button class="block danger" data-pclear style="margin-top:4px">Очистить весь парс</button>`
       : `<div class="card empty">Папки появятся после первого поиска</div>`}`;
   },
@@ -507,6 +514,10 @@ document.addEventListener("click", async e => {
   }
   if (d.open) { e.preventDefault(); const u = "https://t.me/" + d.open.slice(1); tg?.openTelegramLink ? tg.openTelegramLink(u) : window.open(u); return; }
   if ("pstop" in d) return act("/api/parse/stop", {});
+  if ("precheck" in d) {
+    if (!(await confirmBox("Проверить все найденные группы и чаты рассылки? Группы, где писать могут только админы, будут убраны. Займёт 10–30 минут."))) return;
+    return act("/api/parse/recheck", {}, "Проверка запущена. Прогресс — вверху вкладки.");
+  }
   if ("parse" in d || "pall" in d) {
     const all = "pall" in d;
     const text = $("#parse-q").value, topic = $("#pf-topic").value.trim();

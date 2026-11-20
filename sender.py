@@ -446,6 +446,12 @@ class Mailer:
         await self.report("Вступление завершено:\n" + "\n".join(lines))
 
 
+def writes_closed(ch) -> bool:
+    """True, если обычным участникам группы запрещено писать (пишут только админы)."""
+    r = getattr(ch, "default_banned_rights", None)
+    return bool(r and (r.send_messages or getattr(r, "send_plain", False)))
+
+
 class Parser:
     """Поиск публичных групп по ключевым словам (без вступления).
 
@@ -495,7 +501,8 @@ class Parser:
         self._stop = False
         total = sum(len(q) for _, q in jobs)
         self.progress = {"done": 0, "total": total, "found": 0, "checked": 0,
-                         "small": 0, "inactive": 0, "channels": 0, "topic": jobs[0][0] if jobs else ""}
+                         "small": 0, "inactive": 0, "channels": 0, "closed": 0,
+                         "topic": jobs[0][0] if jobs else "", "mode": "search"}
         pr = self.progress
         found_now: list[dict] = []
         self.log(f"🔎 Парс начат: {len(jobs)} тем, {total} запросов, от {min_members} уч., "
@@ -544,6 +551,10 @@ class Parser:
                         pr["channels"] += 1
                         continue
                     pr["checked"] += 1
+                    if writes_closed(ch):
+                        pr["closed"] += 1
+                        d["parse_rejected"].append(link)
+                        continue
                     try:
                         members = ch.participants_count
                         if members is None:
@@ -562,7 +573,8 @@ class Parser:
                         d["parse_rejected"].append(link)
                         continue
                     entry = {"link": link, "title": ch.title, "members": members, "last_ts": last,
-                             "query": q, "topic": topic, "ts": int(time.time())}
+                             "query": q, "topic": topic, "ts": int(time.time()),
+                             "cid": ch.id, "ah": ch.access_hash, "rights_ok": True}
                     parsed.append(entry)
                     found_now.append(entry)
                     new += 1
@@ -577,13 +589,79 @@ class Parser:
             self.db.save()
         summary = (f"🔎 Парс {'остановлен' if self._stop else 'завершён'}: найдено {pr['found']}; "
                    f"отсеяно — меньше {min_members} уч.: {pr['small']}, неактивных: {pr['inactive']}, "
-                   f"каналов: {pr['channels']}")
+                   f"каналов: {pr['channels']}, только для админов: {pr['closed']}")
         self.log(summary)
         if self.on_finish:
             try:
                 await self.on_finish(found_now, summary)
             except Exception:  # noqa: BLE001
                 log.exception("parse report failed")
+
+
+async def _recheck_impl(self) -> None:
+    """Проверяет уже найденные группы и чаты рассылки: где писать могут только админы —
+    убирает из парса и выключает в рассылке. Без вступления, с паузами."""
+    from telethon.tl.functions.channels import GetChannelsRequest
+    from telethon.tl.types import InputChannel
+
+    acc = self.pool.next_available()
+    if acc is None:
+        self.log("⚠ Для проверки нужен хотя бы один включённый аккаунт", "warn")
+        return
+    d = self.db.data
+    targets = [("parsed", p) for p in d["parsed"] if not p.get("rights_ok")]
+    targets += [("chat", c) for c in d["chats"] if not c.get("rights_ok")]
+    self._stop = False
+    self.progress = {"mode": "recheck", "done": 0, "total": len(targets), "closed": 0, "topic": ""}
+    pr = self.progress
+    self.log(f"🛡 Проверка прав: {len(targets)} групп")
+    closed: set[str] = set()
+    try:
+        for kind, item in targets:
+            if self._stop:
+                break
+            link = item["link"]
+            try:
+                if item.get("cid") and item.get("ah"):
+                    res = await acc.client(GetChannelsRequest([InputChannel(item["cid"], item["ah"])]))
+                    ch = res.chats[0]
+                else:
+                    ch = await acc.client.get_entity(link)
+                    await asyncio.sleep(random.uniform(2, 4))  # поиск по @username лимитирован
+            except errors.FloodWaitError as e:
+                if e.seconds > 300:
+                    self.log(f"🛡 FloodWait {e.seconds} с — проверка остановлена, запустите позже "
+                             "(уже проверенные повторно не смотрим)", "warn")
+                    break
+                await asyncio.sleep(e.seconds + 2)
+                continue
+            except Exception as e:  # noqa: BLE001
+                log.info("recheck %s failed: %s", link, e)
+                pr["done"] += 1
+                continue
+            item["cid"], item["ah"] = ch.id, getattr(ch, "access_hash", None)
+            if writes_closed(ch) or (getattr(ch, "broadcast", False) and not getattr(ch, "megagroup", False)):
+                closed.add(link.lower())
+                pr["closed"] += 1
+                if kind == "chat":
+                    item["enabled"] = False
+                    item["last"] = {"ok": False, "text": "писать могут только админы — выключен",
+                                    "ts": int(time.time()), "acc": None}
+                    item["rights_ok"] = True  # проверен; выключен
+            else:
+                item["rights_ok"] = True
+            pr["done"] += 1
+            if pr["done"] % 20 == 0:
+                self.db.save()
+    finally:
+        d["parsed"] = [p for p in d["parsed"] if p["link"].lower() not in closed]
+        d["parse_rejected"] += [p for p in closed]
+        self.progress = None
+        self.db.save()
+    self.log(f"🛡 Проверка прав завершена: проверено {pr['done']}, убрано/выключено {pr['closed']}")
+
+
+Parser.recheck = _recheck_impl
 
 
 def parsed_txt(entries: list[dict], title: str) -> str:

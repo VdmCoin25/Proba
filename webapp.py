@@ -229,9 +229,16 @@ def make_app(ctx: dict) -> web.Application:
             if not queries:
                 raise LoginError("Введите ключевые слова (минимум 3 буквы), каждое с новой строки.")
             jobs = [(topic, queries)]
-        if sum(len(q) for _, q in jobs) > 600:
-            raise LoginError("Не больше 600 запросов за раз.")
+        if sum(len(q) for _, q in jobs) > 5000:
+            raise LoginError("Не больше 5000 запросов за раз.")
         ctx["mailer"].background(ctx["parser"].run(jobs))
+        return ok()
+
+    @routes.post("/api/parse/recheck")
+    async def parse_recheck(_):
+        if ctx["parser"].busy:
+            raise LoginError("Сейчас идёт парс или проверка.")
+        ctx["mailer"].background(ctx["parser"].recheck())
         return ok()
 
     @routes.post("/api/parse/stop")
