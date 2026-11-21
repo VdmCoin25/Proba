@@ -452,6 +452,22 @@ def writes_closed(ch) -> bool:
     return bool(r and (r.send_messages or getattr(r, "send_plain", False)))
 
 
+QUERY_SUFFIXES = ["", " чат", " chat", " группа", " общение"]
+
+
+def expand_query(q: str) -> list[str]:
+    """Расширяет ключевое слово вариантами, чтобы с одного слова найти больше групп."""
+    low = q.lower()
+    out = []
+    for suf in QUERY_SUFFIXES:
+        v = (q + suf).strip()
+        if suf and suf.strip() in low:  # не дублируем, если слово уже содержит «чат» и т.п.
+            continue
+        if v.lower() not in {x.lower() for x in out}:
+            out.append(v)
+    return out
+
+
 class Parser:
     """Поиск публичных групп по ключевым словам (без вступления).
 
@@ -488,8 +504,7 @@ class Parser:
         from telethon.tl.functions.contacts import SearchRequest
         from telethon.tl.types import Channel
 
-        acc = self.pool.next_available()
-        if acc is None:
+        if not self.pool.active():
             self.log("⚠ Для парса нужен хотя бы один включённый аккаунт", "warn")
             return
         d = self.db.data
@@ -499,39 +514,73 @@ class Parser:
         seen = ({p["link"].lower() for p in parsed} | {c.lower() for c in d["parse_rejected"]}
                 | {c["link"].lower() for c in d["chats"]})  # повторы и уже добавленные в рассылку пропускаем
         self._stop = False
-        total = sum(len(q) for _, q in jobs)
+
+        # раскрываем каждое слово в варианты, чтобы с одного слова находить больше групп
+        use_variants = d.get("parse_variants", True)
+        queue: list[tuple[str, str, int]] = []
+        for topic, qs in jobs:
+            for q in qs:
+                for v in (expand_query(q) if use_variants else [q]):
+                    queue.append((topic, v, 0))
+
+        total = len(queue)
         self.progress = {"done": 0, "total": total, "found": 0, "checked": 0,
                          "small": 0, "inactive": 0, "channels": 0, "closed": 0,
                          "topic": jobs[0][0] if jobs else "", "mode": "search"}
         pr = self.progress
         found_now: list[dict] = []
-        self.log(f"🔎 Парс начат: {len(jobs)} тем, {total} запросов, от {min_members} уч., "
-                 f"активность за {d['parse_active_days']} дн. (аккаунт {acc.name})")
+        self.log(f"🔎 Парс начат: {len(jobs)} тем, {total} запросов"
+                 f"{' (с вариантами)' if use_variants else ''}, от {min_members} уч., "
+                 f"активность за {d['parse_active_days']} дн., аккаунтов {len(self.pool.active())}")
 
-        async def guarded(coro):
-            """Выполняет запрос; на коротком FloodWait ждёт, на длинном — останавливает парс."""
+        def pick_account() -> Account | None:
+            """Берёт следующий свободный аккаунт; если все на паузе — возвращает None."""
+            acc = self.pool.next_available()
+            if acc is None:  # все включённые аккаунты на FloodWait-паузе
+                soon = min((a.busy_until for a in self.pool.active()), default=0)
+                wait = int(soon - time.time())
+                if wait > 600:
+                    self.log(f"🔎 Все аккаунты на паузе ещё {wait} с — парс остановлен, продолжите позже", "warn")
+                    self._stop = True
+            return acc
+
+        async def guarded(acc, coro):
+            """Выполняет запрос; на коротком FloodWait ждёт, на длинном — пауза аккаунту."""
             for _ in range(3):
                 try:
                     return await coro()
                 except errors.FloodWaitError as e:
-                    if e.seconds > 300:
-                        self.log(f"🔎 FloodWait {e.seconds} с — парс остановлен, продолжите позже", "warn")
-                        self._stop = True
+                    if e.seconds > 120:
+                        acc.busy_until = time.time() + e.seconds  # уводим аккаунт на паузу
+                        acc.note = f"FloodWait {e.seconds} с"
                         return None
-                    self.log(f"🔎 FloodWait {e.seconds} с — жду", "warn")
                     await asyncio.sleep(e.seconds + 2)
             return None
 
         try:
-            for topic, q in [(t, q) for t, qs in jobs for q in qs]:
+            i = 0
+            while i < len(queue):
                 if self._stop:
                     break
+                acc = pick_account()
+                if acc is None:
+                    if self._stop:
+                        break
+                    await asyncio.sleep(5)  # все аккаунты заняты — ждём, запрос не теряем
+                    continue
+                topic, q, retries = queue[i]
+                i += 1
                 pr["topic"] = topic
                 try:
-                    res = await guarded(lambda: acc.client(SearchRequest(q=q, limit=100)))
+                    res = await guarded(acc, lambda: acc.client(SearchRequest(q=q, limit=100)))
                 except Exception as e:  # noqa: BLE001
                     self.log(f"🔎 «{q}»: {type(e).__name__}", "error")
                     res = None
+                if res is None and not acc.available and retries < 2:
+                    # аккаунт ушёл в паузу прямо на этом запросе — вернём его в очередь другому аккаунту
+                    queue.append((topic, q, retries + 1))
+                    pr["total"] = len(queue)
+                    continue
                 new = 0
                 chats_ = res.chats if res else []
                 log.info("parse q=%r: chats=%d groups=%d channels=%d no_username=%d", q, len(chats_),
@@ -558,12 +607,12 @@ class Parser:
                     try:
                         members = ch.participants_count
                         if members is None:
-                            members = await guarded(lambda: self._members(acc, ch))
+                            members = await guarded(acc, lambda: self._members(acc, ch))
                         if (members or 0) < min_members:
                             pr["small"] += 1
                             d["parse_rejected"].append(link)
                             continue
-                        last = await guarded(lambda: self._last_message_ts(acc, ch))
+                        last = await guarded(acc, lambda: self._last_message_ts(acc, ch))
                         await asyncio.sleep(random.uniform(1, 2))
                     except Exception as e:  # noqa: BLE001
                         self.log(f"🔎 {link}: не удалось проверить ({type(e).__name__})", "warn")

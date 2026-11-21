@@ -42,9 +42,12 @@ def check_init_data(init_data: str, token: str, admin_id: int) -> bool:
         return False
 
 
-def load_sections() -> list[dict]:
-    """Готовые темы с ключевыми словами из keywords.json."""
-    path = Path(__file__).with_name("keywords.json")
+BASES = {"de": "keywords.json", "nft": "keywords_nft.json"}
+
+
+def load_sections(base: str = "de") -> list[dict]:
+    """Готовые темы с ключевыми словами из выбранной базы."""
+    path = Path(__file__).with_name(BASES.get(base, BASES["de"]))
     return json.loads(path.read_text("utf-8")) if path.exists() else []
 
 
@@ -67,6 +70,7 @@ def build_state(ctx: dict) -> dict:
             "interval_min": d["interval_min"], "delay_sec": d["delay_sec"], "join_delay": d["join_delay"],
             "post_mode": d.get("post_mode", "rotate"), "notify": d.get("notify", True),
             "parse_min_members": d["parse_min_members"], "parse_active_days": d["parse_active_days"],
+            "parse_variants": d.get("parse_variants", True),
         },
         "accounts": [{
             "name": a.name, "title": a.title, "enabled": pool.is_enabled(a.name),
@@ -162,6 +166,8 @@ def make_app(ctx: dict) -> web.Application:
                 d[key] = [lo, hi]
         if "parse_min_members" in b:
             d["parse_min_members"] = max(0, int(b["parse_min_members"]))
+        if "parse_variants" in b:
+            d["parse_variants"] = bool(b["parse_variants"])
         if "parse_active_days" in b:
             d["parse_active_days"] = max(1, int(b["parse_active_days"]))
         if b.get("post_mode") in ("rotate", "random"):
@@ -222,7 +228,7 @@ def make_app(ctx: dict) -> web.Application:
         if ctx["parser"].busy:
             raise LoginError("Парс уже идёт.")
         if b.get("all_sections"):
-            jobs = [(sec["topic"], sec["queries"]) for sec in load_sections()]
+            jobs = [(sec["topic"], sec["queries"]) for sec in load_sections(b.get("base", "de"))]
         else:
             topic = (b.get("topic") or "").strip()[:60] or "Без темы"
             queries = [q.strip() for q in re.split(r"[\n,;]+", b.get("text", "")) if len(q.strip()) >= 3]
@@ -247,8 +253,9 @@ def make_app(ctx: dict) -> web.Application:
         return ok()
 
     @routes.get("/api/keywords")
-    async def keywords(_):
-        return web.json_response({"sections": load_sections()})
+    async def keywords(request):
+        return web.json_response({"sections": load_sections(request.query.get("base", "de")),
+                                  "bases": {"de": "Германия · работа и жильё", "nft": "NFT · подарки · крипта"}})
 
     @routes.post("/api/parsed/export")
     async def parsed_export(request):

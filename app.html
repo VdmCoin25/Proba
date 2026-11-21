@@ -322,8 +322,15 @@ const views = {
           </div>
           <label class="field" style="margin-bottom:0"><span>Ключевые слова — каждое с новой строки${nQ ? ` (${nQ})` : ""}</span>
             <textarea id="parse-q" placeholder="работа германия&#10;вакансии германия">${esc(ui.parseText)}</textarea></label>
+          <div class="row between" style="margin:12px 2px 0">
+            <span class="small">Искать больше: добавлять к слову «чат», «chat», «группа»</span>
+            <label class="switch"><input type="checkbox" id="pf-variants" ${(ui.pfVariants ?? S.settings.parse_variants) ? "checked" : ""}><span></span></label>
+          </div>
           <button class="block" data-parse style="margin-top:10px">🔎 Искать в тему</button>
-          <button class="block ghost" data-pall style="margin-top:8px">🚀 Искать по всем темам моей базы</button>`}
+          <h2 style="margin:18px 0 8px">Готовые базы — искать по всем темам сразу</h2>
+          ${(ui.bases ? Object.entries(ui.bases) : []).map(([k, name]) =>
+            `<button class="block ghost" data-pall="${k}" style="margin-bottom:8px">🚀 ${esc(name)}</button>`).join("")
+            || `<button class="block ghost" data-pall="de">🚀 Искать по всем темам базы</button>`}`}
       </div>
       <h2>Папки</h2>
       ${Object.keys(topics).length ? `<div class="card list">
@@ -510,6 +517,9 @@ document.addEventListener("click", async e => {
   }
   if (d.section) {
     ui.chatSection = d.section; ui.selected.clear(); render();
+    if (d.section === "parsed" && !ui.bases) {
+      try { ui.bases = (await api("/api/keywords")).bases; render(); } catch (_) {}
+    }
     return;
   }
   if (d.open) { e.preventDefault(); const u = "https://t.me/" + d.open.slice(1); tg?.openTelegramLink ? tg.openTelegramLink(u) : window.open(u); return; }
@@ -518,15 +528,16 @@ document.addEventListener("click", async e => {
     if (!(await confirmBox("Проверить все найденные группы и чаты рассылки? Группы, где писать могут только админы, будут убраны. Займёт 10–30 минут."))) return;
     return act("/api/parse/recheck", {}, "Проверка запущена. Прогресс — вверху вкладки.");
   }
-  if ("parse" in d || "pall" in d) {
-    const all = "pall" in d;
+  if ("parse" in d || d.pall) {
+    const all = !!d.pall;
     const text = $("#parse-q").value, topic = $("#pf-topic").value.trim();
     if (!all && !text.trim()) return alertBox("Введите ключевые слова или выберите готовую тему.");
     if (!all && !topic) return alertBox("Назовите тему — так будет называться папка с найденными чатами.");
-    if (all && !(await confirmBox("Запустить поиск по всем 14 темам вашей базы (310 слов)? Это займёт 1–2 часа, каждая тема попадёт в свою папку."))) return;
-    const s1 = await act("/api/settings", {parse_min_members: +$("#pf-min").value, parse_active_days: +$("#pf-days").value});
+    if (all && !(await confirmBox("Запустить поиск по всем темам этой базы? С учётом вариантов это надолго (возможно, не один час). Каждая тема попадёт в свою папку. Если аккаунт один, Telegram может дать паузу — тогда продолжите позже."))) return;
+    const s1 = await act("/api/settings", {parse_min_members: +$("#pf-min").value, parse_active_days: +$("#pf-days").value,
+                                           parse_variants: $("#pf-variants")?.checked ?? true});
     if (!s1) return;
-    const r = await act("/api/parse", all ? {all_sections: true} : {text, topic});
+    const r = await act("/api/parse", all ? {all_sections: true, base: d.pall} : {text, topic});
     if (r) { ui.parseText = ""; ui.parseTopic = ""; render(); }
     return;
   }
@@ -614,6 +625,7 @@ document.addEventListener("change", e => {
   if (d.posttoggle) return act("/api/posts/update", {id: d.posttoggle, action: t.checked ? "enable" : "disable"});
   if (d.sel) { t.checked ? ui.selected.add(d.sel) : ui.selected.delete(d.sel); render(); }
   if (t.id === "parse-hide") { ui.parseHideAdded = t.checked; ui.selected.clear(); render(); }
+  if (t.id === "pf-variants") ui.pfVariants = t.checked;
 });
 document.addEventListener("input", e => {
   const id = e.target.id;
@@ -622,6 +634,7 @@ document.addEventListener("input", e => {
   if (id === "pf-topic") ui.parseTopic = e.target.value;
   if (id === "pf-min") ui.pfMin = e.target.value;
   if (id === "pf-days") ui.pfDays = e.target.value;
+  if (id === "pf-variants") ui.pfVariants = e.target.checked;
   if (id === "parse-filter") {
     ui.parseFilter = e.target.value;
     const pos = e.target.selectionStart; render();
