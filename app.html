@@ -336,7 +336,8 @@ const views = {
         : step === "code" ? `
           <p class="small" style="margin:10px 0 6px">Telegram отправил код <b>${esc(S.login_where || "в приложение Telegram")}</b>.</p>
           <p class="hint small" style="margin:0 0 10px">${(S.login_where || "").startsWith("в приложение")
-            ? "Откройте Telegram на устройстве, где уже вошли в этот номер, — код будет в чате «Telegram». Если там этот номер нигде не открыт, нажмите «Отправить по SMS»."
+            ? ("Откройте приложение Telegram на устройстве, где этот номер уже залогинен, — код в чате «Telegram» (официальный, с галочкой)."
+               + (S.login_resend ? " Если номер нигде не открыт — нажмите кнопку ниже." : " SMS для этого номера Telegram не отправляет, поэтому получить код можно только из приложения."))
             : "Подождите 1–2 минуты. SMS на некоторые номера приходят с задержкой."}</p>
           <input id="lg-val" inputmode="numeric" placeholder="12345" autocomplete="one-time-code">
           <div class="btns" style="margin-top:10px"><button class="ghost" data-login="cancel">Отмена</button><button data-login="code">Войти</button></div>
