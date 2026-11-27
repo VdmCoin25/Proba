@@ -256,6 +256,11 @@ def make_app(ctx: dict) -> web.Application:
         m.background(m.join_all(names))
         return ok()
 
+    @routes.post("/api/join/stop")
+    async def join_stop(_):
+        ctx["mailer"].stop_join()
+        return ok()
+
     # ----- парс -----
     @routes.post("/api/parse")
     async def parse(request):

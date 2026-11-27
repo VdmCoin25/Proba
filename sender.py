@@ -314,6 +314,7 @@ class Mailer:
         self.progress: dict | None = None   # {"what": "send"|"join", "done": i, "total": n}
         self.logs: deque = deque(maxlen=200)
         self._bg: set[asyncio.Task] = set()
+        self._join_stop = False
 
     # ---------- журнал ----------
     def log(self, text: str, level: str = "info") -> None:
@@ -359,6 +360,10 @@ class Mailer:
             wait = self.db.data["interval_min"] * 60
             self.next_run = time.time() + wait
             await asyncio.sleep(wait)
+
+    def stop_join(self) -> None:
+        self._join_stop = True
+        self.log("⏹ Останавливаю вступление…", "warn")
 
     def background(self, coro) -> None:
         t = asyncio.create_task(coro)
@@ -492,11 +497,14 @@ class Mailer:
                 self.log("⚠ Для вступления нужны и чаты, и аккаунты", "warn")
                 return
             lo, hi = self.db.data["join_delay"]
+            self._join_stop = False
             self.log(f"🚪 Вступление: {len(accounts)} акк. × {len(chats)} чатов")
             self.progress = {"what": "join", "done": 0, "total": len(accounts) * len(chats)}
             lines = []
             try:
                 for acc in accounts:
+                    if self._join_stop:
+                        break
                     joined = 0
                     try:
                         dialogs = await acc.client.get_dialogs()
@@ -507,6 +515,8 @@ class Mailer:
                     have = {("@" + d.entity.username).lower() for d in dialogs
                             if getattr(d.entity, "username", None)}
                     for chat in chats:
+                        if self._join_stop:
+                            break
                         self.progress["done"] += 1
                         if chat.lower() in have:
                             continue
@@ -528,9 +538,11 @@ class Mailer:
                         await asyncio.sleep(random.uniform(lo, hi))
                     lines.append(f"{acc.name}: новых вступлений {joined}")
             finally:
+                stopped = self._join_stop
+                self._join_stop = False
                 self.progress = None
-        self.log("🚪 Вступление завершено")
-        await self.report("Вступление завершено:\n" + "\n".join(lines))
+        self.log("🚪 Вступление " + ("остановлено" if stopped else "завершено"))
+        await self.report(("Вступление остановлено:\n" if stopped else "Вступление завершено:\n") + "\n".join(lines))
 
 
 def writes_closed(ch) -> bool:

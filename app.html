@@ -177,6 +177,7 @@ async function act(path, data, okMsg) {
 }
 
 async function refresh() {
+  if (ui.busyToggles) return;   // не мешаем переключателю, пока его запрос в полёте
   try {
     S = await api("/api/state");
     $("#banner").classList.add("hidden");
@@ -302,7 +303,8 @@ const views = {
       <div class="card">
         <div class="row between"><b style="font-size:17px">Рассылка</b>${status}</div>
         ${p ? `<div class="bar"><i style="width:${pct}%"></i></div>
-               <div class="hint small" style="margin-top:6px">${p.what === "join" ? "Вступление" : "Отправка"}: ${p.done} из ${p.total}</div>` : ""}
+               <div class="row between" style="margin-top:6px"><span class="hint small">${p.what === "join" ? "Вступление в чаты" : "Отправка"}: ${p.done} из ${p.total}</span>
+                 ${p.what === "join" ? `<button class="sm danger" data-joinstop>⏹ Остановить</button>` : ""}</div>` : ""}
         ${S.next_run && !S.busy ? `<div class="hint small" style="margin-top:8px">Следующий круг через ${fmtLeft(S.next_run - S.now)}</div>` : ""}
         ${ready.length ? `<div class="hint small" style="margin-top:8px">Чтобы начать, добавьте: ${ready.map(([, w, t]) => `<a href="#" data-go="${t}" style="color:var(--link)">${w}</a>`).join(", ")}</div>` : ""}
         <div class="btns" style="margin-top:14px">
@@ -713,6 +715,7 @@ document.addEventListener("click", async e => {
     return;
   }
   if (d.joinone) return act("/api/join", {accounts: [d.joinone]}, "Вступление запущено. Прогресс — на главной.");
+  if ("joinstop" in d) return act("/api/join/stop", {}, "Останавливаю вступление…");
   if ("joinall" in d) {
     if (!(await confirmBox("Все аккаунты вступят во все включённые чаты. Это может занять много времени. Начать?"))) return;
     return act("/api/join", {}, "Вступление запущено. Прогресс — на главной.");
@@ -829,15 +832,28 @@ document.addEventListener("click", async e => {
   }
 });
 
+// переключатель откликается мгновенно: нативный флип виден сразу, запрос уходит в фоне,
+// при ошибке возвращаем положение назад. Без полной перерисовки — анимация не сбрасывается.
+async function optSwitch(t, path, data, apply) {
+  const was = !t.checked;
+  ui.busyToggles = (ui.busyToggles || 0) + 1;   // пауза фонового refresh, чтобы не дёргал
+  apply(t.checked);
+  try { await api(path, data); }
+  catch (e) { t.checked = was; apply(was); haptic("error"); alertBox(e.message); }
+  finally { ui.busyToggles--; }
+}
+
 document.addEventListener("change", e => {
   const t = e.target, d = t.dataset;
-  if (d.chat) return act("/api/chats/update", {action: t.checked ? "enable" : "disable", links: [d.chat]});
-  if (d.posttoggle) return act("/api/posts/update", {id: d.posttoggle, action: t.checked ? "enable" : "disable"});
+  if (d.chat) { const c = S.chats.find(x => x.link === d.chat);
+    return optSwitch(t, "/api/chats/update", {action: t.checked ? "enable" : "disable", links: [d.chat]}, v => { if (c) c.enabled = v; }); }
+  if (d.posttoggle) { const p = S.posts.find(x => x.id === d.posttoggle);
+    return optSwitch(t, "/api/posts/update", {id: d.posttoggle, action: t.checked ? "enable" : "disable"}, v => { if (p) p.enabled = v; }); }
+  if (t.id === "r-enabled") return optSwitch(t, "/api/radar/settings", {enabled: t.checked}, v => { S.radar.cfg.enabled = v; });
+  if (t.id === "r-mailing") return optSwitch(t, "/api/radar/settings", {watch_mailing: t.checked}, v => { S.radar.cfg.watch_mailing = v; });
   if (d.sel) { t.checked ? ui.selected.add(d.sel) : ui.selected.delete(d.sel); render(); }
   if (t.id === "parse-hide") { ui.parseHideAdded = t.checked; ui.selected.clear(); render(); }
   if (t.id === "pf-variants") ui.pfVariants = t.checked;
-  if (t.id === "r-enabled") act("/api/radar/settings", {enabled: t.checked});
-  if (t.id === "r-mailing") act("/api/radar/settings", {watch_mailing: t.checked});
   if (t.id === "lg-country") ui.country = COUNTRIES.findIndex(c => c[2] === t.value);
 });
 document.addEventListener("input", e => {
