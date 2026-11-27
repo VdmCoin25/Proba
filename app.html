@@ -145,7 +145,8 @@ function fmtLeft(sec) {
 async function api(path, data) {
   const res = await fetch(path, {
     method: data === undefined ? "GET" : "POST",
-    headers: {"Content-Type": "application/json", "X-Init-Data": INIT},
+    headers: {"Content-Type": "application/json", "X-Init-Data": INIT,
+              "X-Parsed": tab === "chats" && ui.chatSection === "parsed" ? "1" : "0"},
     body: data === undefined ? undefined : JSON.stringify(data),
   });
   let json = {};
@@ -317,9 +318,13 @@ const views = {
           <input id="lg-val" type="tel" inputmode="tel" placeholder="+49 170 1234567" autocomplete="off">
           <div class="btns" style="margin-top:10px"><button class="ghost" data-login="cancel">Отмена</button><button data-login="phone">Получить код</button></div>`
         : step === "code" ? `
-          <p class="hint small">Введите код из Telegram (сообщение от «Telegram» на этом аккаунте).</p>
+          <p class="small" style="margin:10px 0 6px">Telegram отправил код <b>${esc(S.login_where || "в приложение Telegram")}</b>.</p>
+          <p class="hint small" style="margin:0 0 10px">${(S.login_where || "").startsWith("в приложение")
+            ? "Откройте Telegram на устройстве, где уже вошли в этот номер, — код будет в чате «Telegram». Если там этот номер нигде не открыт, нажмите «Отправить по SMS»."
+            : "Подождите 1–2 минуты. SMS на некоторые номера приходят с задержкой."}</p>
           <input id="lg-val" inputmode="numeric" placeholder="12345" autocomplete="one-time-code">
-          <div class="btns" style="margin-top:10px"><button class="ghost" data-login="cancel">Отмена</button><button data-login="code">Войти</button></div>`
+          <div class="btns" style="margin-top:10px"><button class="ghost" data-login="cancel">Отмена</button><button data-login="code">Войти</button></div>
+          ${S.login_resend ? `<button class="block ghost" data-login="resend" style="margin-top:8px">🔁 Код не пришёл — отправить по SMS / звонком</button>` : ""}`
         : `
           <p class="hint small">На аккаунте включён облачный пароль (2FA). Введите его.</p>
           <input id="lg-val" type="password" placeholder="Пароль" autocomplete="off">
@@ -349,7 +354,7 @@ const views = {
   chats() {
     const top = `<div class="seg" style="margin-bottom:12px">
         <button class="${ui.chatSection === "mailing" ? "on" : ""}" data-section="mailing">Для рассылок ${S.chats.length}</button>
-        <button class="${ui.chatSection === "parsed" ? "on" : ""}" data-section="parsed">Все чаты парса ${S.parsed.length}</button>
+        <button class="${ui.chatSection === "parsed" ? "on" : ""}" data-section="parsed">Все чаты парса ${S.parsed_count}</button>
       </div>`;
     return top + (ui.chatSection === "parsed" ? views.parsed() : views.mailing());
   },
@@ -619,6 +624,7 @@ document.addEventListener("click", async e => {
   if ("addacc" in d) { ui.addAcc = true; render(); $("#lg-val")?.focus(); return; }
   if (d.login) {
     if (d.login === "cancel") { ui.addAcc = false; return act("/api/login", {step: "cancel"}); }
+    if (d.login === "resend") { const r = await act("/api/login", {step: "resend"}); if (r) alertBox("Код отправлен повторно " + (r.login_where || "")); return; }
     const v = $("#lg-val")?.value.trim();
     if (!v) return alertBox("Заполните поле.");
     t.disabled = true; t.textContent = "…";
@@ -645,6 +651,7 @@ document.addEventListener("click", async e => {
   }
   if (d.section) {
     ui.chatSection = d.section; ui.selected.clear(); render();
+    if (d.section === "parsed") refresh();
     if (d.section === "parsed" && !ui.bases) {
       try { ui.bases = (await api("/api/keywords")).bases; render(); } catch (_) {}
     }

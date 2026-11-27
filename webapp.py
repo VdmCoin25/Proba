@@ -3,6 +3,7 @@
 Каждый запрос к /api/ подписан Telegram (initData) — проверяем подпись токеном бота
 и что открыл именно владелец (ADMIN_ID). Чужой человек по ссылке ничего не увидит.
 """
+import contextvars
 import hashlib
 import hmac
 import html as htmllib
@@ -19,6 +20,7 @@ from aiohttp import web
 from sender import LoginError, new_post, normalize_chat
 
 APP_HTML = Path(__file__).with_name("app.html")
+CURRENT_REQ: contextvars.ContextVar = contextvars.ContextVar("current_req")
 
 
 def check_init_data(init_data: str, token: str, admin_id: int) -> bool:
@@ -70,7 +72,7 @@ def plain(text: str, limit: int = 300) -> str:
     return s if len(s) <= limit else s[:limit] + "…"
 
 
-def build_state(ctx: dict) -> dict:
+def build_state(ctx: dict, full_parsed: bool = False) -> dict:
     db, pool, mailer, login = ctx["db"], ctx["pool"], ctx["mailer"], ctx["login"]
     d = db.data
     now = time.time()
@@ -95,7 +97,10 @@ def build_state(ctx: dict) -> dict:
         "posts": [{"id": p["id"], "text": plain(p.get("html", "")), "html": p.get("html", ""),
                    "type": p.get("type"), "enabled": p.get("enabled", True)} for p in d["posts"]],
         "login_step": login.step,
-        "parsed": d["parsed"],
+        "login_where": login.where,
+        "login_resend": login.can_resend,
+        "parsed": d["parsed"] if full_parsed else [],
+        "parsed_count": len(d["parsed"]),
         "radar": radar_summary(ctx),
         "parsing": ctx["parser"].progress,
         "logs": list(mailer.logs)[:120],
@@ -114,6 +119,7 @@ def make_app(ctx: dict) -> web.Application:
             if not ctx.get("ready"):
                 return web.json_response({"error": "Бот ещё запускается, подождите минуту."}, status=503)
             try:
+                CURRENT_REQ.set(request)
                 return await handler(request)
             except LoginError as e:
                 return web.json_response({"error": str(e)}, status=400)
@@ -130,8 +136,12 @@ def make_app(ctx: dict) -> web.Application:
         except Exception:  # noqa: BLE001
             return {}
 
-    def ok():
-        return web.json_response(build_state(ctx))
+    def ok(request=None):
+        req = request or CURRENT_REQ.get(None)
+        full = bool(req and req.headers.get("X-Parsed") == "1")
+        return web.json_response(build_state(ctx, full))
+
+
 
     @routes.get("/")
     @routes.get("/health")
@@ -372,6 +382,8 @@ def make_app(ctx: dict) -> web.Application:
         elif step == "password":
             await flow.password(b["value"])
             ctx["mailer"].log(f"➕ Добавлен аккаунт {flow.last_added.name}: {flow.last_added.title}")
+        elif step == "resend":
+            await flow.resend()
         elif step == "cancel":
             await flow.cancel()
         else:

@@ -140,6 +140,26 @@ class AccountPool:
         return None
 
 
+CODE_WHERE = {
+    "SentCodeTypeApp": "в приложение Telegram этого номера (чат «Telegram» на телефоне, где он уже открыт)",
+    "SentCodeTypeSms": "по SMS",
+    "SentCodeTypeCall": "голосовым звонком",
+    "SentCodeTypeFlashCall": "звонком (код — последние цифры номера звонящего)",
+    "SentCodeTypeMissedCall": "пропущенным звонком (код — последние цифры номера звонящего)",
+    "SentCodeTypeFragmentSms": "через Fragment",
+    "SentCodeTypeFirebaseSms": "по SMS",
+    "SentCodeTypeSmsWord": "по SMS (кодовое слово)",
+    "SentCodeTypeSmsPhrase": "по SMS (кодовая фраза)",
+    "SentCodeTypeEmailCode": "на почту, привязанную к аккаунту",
+    "SentCodeTypeSetUpEmailRequired": "— Telegram требует сначала привязать почту",
+}
+
+
+def code_where(sent) -> str:
+    t = type(getattr(sent, "type", None)).__name__
+    return CODE_WHERE.get(t, t)
+
+
 class LoginFlow:
     """Пошаговый вход в аккаунт: телефон → код → (пароль 2FA). Общий для бота и мини-аппа."""
 
@@ -148,12 +168,41 @@ class LoginFlow:
         self.client: TelegramClient | None = None
         self.phone = self.hash = self.name = None
         self.step = "idle"  # idle | code | password
+        self.where = ""     # куда Telegram отправил код
+        self.can_resend = False
+        self.started = 0.0
 
     async def cancel(self) -> None:
         if self.client:
             await self.client.disconnect()
         self.client = self.phone = self.hash = self.name = None
         self.step = "idle"
+        self.where, self.can_resend = "", False
+
+    def _apply_sent(self, sent) -> None:
+        self.hash = sent.phone_code_hash
+        self.where = code_where(sent)
+        self.can_resend = getattr(sent, "next_type", None) is not None
+        log.info("login %s: code sent %s, next=%s", self.phone, type(sent.type).__name__,
+                 type(getattr(sent, "next_type", None)).__name__)
+        if type(sent.type).__name__ == "SentCodeTypeSetUpEmailRequired":
+            raise LoginError("Telegram требует сначала привязать почту к этому аккаунту. Откройте этот номер "
+                             "в официальном приложении Telegram, войдите в него один раз и привяжите почту, "
+                             "затем попробуйте снова.")
+
+    async def resend(self) -> str:
+        """Повторная отправка кода — Telegram переключает способ (обычно на SMS или звонок)."""
+        from telethon.tl.functions.auth import ResendCodeRequest
+        if self.step != "code":
+            raise LoginError("Сначала введите номер телефона.")
+        try:
+            sent = await self.client(ResendCodeRequest(self.phone, self.hash))
+        except errors.FloodWaitError as e:
+            raise LoginError(f"Telegram просит подождать {e.seconds} с перед повторной отправкой.")
+        except Exception as e:  # noqa: BLE001
+            raise LoginError(f"Не удалось отправить код повторно: {type(e).__name__}: {e}")
+        self._apply_sent(sent)
+        return self.step
 
     async def start(self, phone: str) -> str:
         await self.cancel()
@@ -169,14 +218,22 @@ class LoginFlow:
         except errors.PhoneNumberInvalidError:
             await self.cancel()
             raise LoginError("Неверный номер телефона.")
+        except errors.PhoneNumberBannedError:
+            await self.cancel()
+            raise LoginError("Этот номер заблокирован в Telegram.")
         except errors.FloodWaitError as e:
             await self.cancel()
             raise LoginError(f"Telegram просит подождать {e.seconds} с перед новой попыткой.")
         except Exception as e:  # noqa: BLE001
             await self.cancel()
             raise LoginError(f"Не удалось отправить код: {type(e).__name__}: {e}")
-        self.phone, self.hash, self.name = phone, sent.phone_code_hash, self.pool.free_name()
+        self.phone, self.name = phone, self.pool.free_name()
         self.step = "code"
+        try:
+            self._apply_sent(sent)
+        except LoginError:
+            await self.cancel()
+            raise
         return self.step
 
     def _phones(self) -> list[str]:
