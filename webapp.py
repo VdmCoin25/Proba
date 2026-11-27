@@ -390,6 +390,14 @@ def make_app(ctx: dict) -> web.Application:
             raise LoginError("Неизвестный шаг")
         return ok()
 
+    @routes.post("/api/accounts/code")
+    async def accounts_code(request):
+        name = (await body(request)).get("name", "")
+        res = await ctx["pool"].login_code(name)
+        if not res.get("ok"):
+            raise LoginError(res.get("error", "Ошибка"))
+        return web.json_response(res)
+
     @routes.post("/api/accounts/update")
     async def accounts_update(request):
         b = await body(request)

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+import re
 import time
 import uuid
 from collections import deque
@@ -129,6 +130,28 @@ class AccountPool:
 
     def active(self) -> list[Account]:
         return [a for a in self.accounts if self.is_enabled(a.name)]
+
+    async def login_code(self, name: str) -> dict:
+        """Читает последний код входа, который Telegram прислал на этот аккаунт (от служебного 777000).
+        Нужно, когда на основном устройстве вышло из аккаунта и код приходит только в активные сессии."""
+        acc = next((a for a in self.accounts if a.name == name), None)
+        if acc is None:
+            return {"ok": False, "error": "Аккаунт не подключён. Обновите список: /reload."}
+        try:
+            msgs = await acc.client.get_messages(777000, limit=5)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"Не удалось прочитать: {type(e).__name__}"}
+        kw = ("login code", "код", "code", "giriş", "anmelde", "acceso", "acesso", "connexion")
+        for m in msgs:
+            text = m.message or ""
+            if not text or not any(w in text.lower() for w in kw):
+                continue
+            mt = re.search(r"(?<!\d)(\d[\d \-]{3,6}\d)(?!\d)", text)
+            code = re.sub(r"\D", "", mt.group(1)) if mt else None
+            age = int(time.time() - m.date.timestamp()) if m.date else None
+            return {"ok": True, "code": code, "text": text[:400], "age": age}
+        return {"ok": True, "code": None, "text": "",
+                "note": "Новых кодов нет. Запросите вход на другом устройстве, затем нажмите снова."}
 
     def next_available(self, exclude: set[str] = frozenset()) -> Account | None:
         n = len(self.accounts)

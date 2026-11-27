@@ -338,6 +338,7 @@ const views = {
           <span class="hint small">${esc(a.name)} · отправлено ${a.sent}${a.note ? " · " + esc(a.note) : ""}</span></div>${st}</div>
         <div class="row" style="margin-top:10px; gap:6px; flex-wrap:wrap">
           <button class="sm ghost" data-acc="${a.enabled ? "disable" : "enable"}" data-name="${esc(a.name)}">${a.enabled ? "Выключить" : "Включить"}</button>
+          <button class="sm ghost" data-code="${esc(a.name)}">🔑 Код для входа</button>
           <button class="sm ghost" data-joinone="${esc(a.name)}" ${S.busy ? "disabled" : ""}>Вступить в чаты</button>
           ${a.pause ? `<button class="sm ghost" data-acc="unpause" data-name="${esc(a.name)}">Снять паузу</button>` : ""}
           <button class="sm danger" data-acc="delete" data-name="${esc(a.name)}">Удалить</button>
@@ -636,6 +637,16 @@ document.addEventListener("click", async e => {
   if (d.acc) {
     if (d.acc === "delete" && !(await confirmBox(`Удалить ${d.name}? Сессия будет завершена.`))) return;
     return act("/api/accounts/update", {name: d.name, action: d.acc});
+  }
+  if (d.code) {
+    t.disabled = true; t.textContent = "…";
+    try {
+      const r = await api("/api/accounts/code", {name: d.code});
+      if (r.code) alertBox(`Код для входа: ${r.code}\n\n${r.age != null ? "Получен " + fmtLeft(r.age) + " назад.\n\n" : ""}Введите его на устройстве, где входите в аккаунт.`);
+      else alertBox(r.note || "Кодов не найдено. Сначала запросите вход на нужном устройстве, потом нажмите «Код для входа» здесь.");
+    } catch (e) { alertBox(e.message); }
+    render();
+    return;
   }
   if (d.joinone) return act("/api/join", {accounts: [d.joinone]}, "Вступление запущено. Прогресс — на главной.");
   if ("joinall" in d) {
