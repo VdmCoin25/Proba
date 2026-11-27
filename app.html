@@ -121,9 +121,20 @@
 const tg = window.Telegram?.WebApp;
 tg?.ready(); tg?.expand();
 const INIT = tg?.initData || "";
+const COUNTRIES = [
+  ["🇺🇦","Украина","380"],["🇷🇺","Россия","7"],["🇰🇿","Казахстан","7"],["🇩🇪","Германия","49"],
+  ["🇵🇱","Польша","48"],["🇪🇸","Испания","34"],["🇵🇹","Португалия","351"],["🇫🇷","Франция","33"],
+  ["🇮🇹","Италия","39"],["🇬🇧","Великобритания","44"],["🇨🇿","Чехия","420"],["🇸🇰","Словакия","421"],
+  ["🇳🇱","Нидерланды","31"],["🇧🇪","Бельгия","32"],["🇦🇹","Австрия","43"],["🇨🇭","Швейцария","41"],
+  ["🇮🇪","Ирландия","353"],["🇷🇴","Румыния","40"],["🇧🇬","Болгария","359"],["🇬🇷","Греция","30"],
+  ["🇭🇺","Венгрия","36"],["🇱🇹","Литва","370"],["🇱🇻","Латвия","371"],["🇪🇪","Эстония","372"],
+  ["🇲🇩","Молдова","373"],["🇬🇪","Грузия","995"],["🇹🇷","Турция","90"],["🇸🇪","Швеция","46"],
+  ["🇳🇴","Норвегия","47"],["🇩🇰","Дания","45"],["🇫🇮","Финляндия","358"],["🇺🇸","США/Канада","1"],
+  ["🇦🇪","ОАЭ","971"],["🇮🇱","Израиль","972"],["🇷🇸","Сербия","381"],["🇭🇷","Хорватия","385"],
+];
 let S = null;              // последнее состояние с сервера
 let tab = "home";
-let ui = { leads: null, leadsCount: 0, lf: {status: "new", temp: "", niche: "", lang: ""}, radarOpen: false, expanded: new Set(), tick: 0, chatSection: "mailing", parseText: "", parseTopic: "", folder: null, folderList: [], copyText: "", parseFilter: "", parseHideAdded: false, chatFilter: "all", selected: new Set(), editPost: null, newPost: false, addAcc: false, chatAdd: "" };
+let ui = { country: 0, leads: null, leadsCount: 0, lf: {status: "new", temp: "", niche: "", lang: ""}, radarOpen: false, expanded: new Set(), tick: 0, chatSection: "mailing", parseText: "", parseTopic: "", folder: null, folderList: [], copyText: "", parseFilter: "", parseHideAdded: false, chatFilter: "all", selected: new Set(), editPost: null, newPost: false, addAcc: false, chatAdd: "" };
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -314,9 +325,14 @@ const views = {
       <div class="card">
         <b>Новый аккаунт</b>
         ${step === "idle" ? `
-          <p class="hint small">Введите номер в международном формате. Код придёт в Telegram этого аккаунта.</p>
-          <input id="lg-val" type="tel" inputmode="tel" placeholder="+49 170 1234567" autocomplete="off">
-          <div class="btns" style="margin-top:10px"><button class="ghost" data-login="cancel">Отмена</button><button data-login="phone">Получить код</button></div>`
+          <p class="hint small">Выберите страну и введите номер без кода страны и без первого нуля.</p>
+          <div class="row" style="gap:8px; margin-bottom:10px">
+            <select id="lg-country" style="flex:0 0 42%">${COUNTRIES.map(([f, n, c], i) =>
+              `<option value="${c}" ${i === (ui.country ?? 0) ? "selected" : ""}>${f} +${c} ${esc(n)}</option>`).join("")}</select>
+            <input id="lg-num" class="grow" type="tel" inputmode="tel" placeholder="50 123 45 67" autocomplete="off">
+          </div>
+          <div class="btns"><button class="ghost" data-login="cancel">Отмена</button><button data-login="phone">Получить код</button></div>
+          <p class="hint small" style="margin:8px 2px 0">Пример для Украины: номер 050 123 45 67 → выберите 🇺🇦 +380 и введите 50 123 45 67.</p>`
         : step === "code" ? `
           <p class="small" style="margin:10px 0 6px">Telegram отправил код <b>${esc(S.login_where || "в приложение Telegram")}</b>.</p>
           <p class="hint small" style="margin:0 0 10px">${(S.login_where || "").startsWith("в приложение")
@@ -623,12 +639,20 @@ document.addEventListener("click", async e => {
     if (d.run === "stop" && !(await confirmBox("Остановить авто-рассылку?"))) return;
     return act("/api/run", {action: d.run}, d.run === "once" ? "Круг запущен. Прогресс — на главной." : null);
   }
-  if ("addacc" in d) { ui.addAcc = true; render(); $("#lg-val")?.focus(); return; }
+  if ("addacc" in d) { ui.addAcc = true; render(); $("#lg-num")?.focus(); return; }
   if (d.login) {
     if (d.login === "cancel") { ui.addAcc = false; return act("/api/login", {step: "cancel"}); }
     if (d.login === "resend") { const r = await act("/api/login", {step: "resend"}); if (r) alertBox("Код отправлен повторно " + (r.login_where || "")); return; }
-    const v = $("#lg-val")?.value.trim();
-    if (!v) return alertBox("Заполните поле.");
+    let v;
+    if (d.login === "phone") {
+      const code = $("#lg-country")?.value, num = ($("#lg-num")?.value || "").replace(/\D/g, "").replace(/^0+/, "");
+      ui.country = COUNTRIES.findIndex(c => c[2] === code);
+      if (!num) return alertBox("Введите номер телефона.");
+      v = "+" + code + num;
+    } else {
+      v = $("#lg-val")?.value.trim();
+      if (!v) return alertBox("Заполните поле.");
+    }
     t.disabled = true; t.textContent = "…";
     const r = await act("/api/login", {step: d.login, value: v});
     if (r && r.login_step === "idle") { ui.addAcc = false; render(); alertBox("✅ Аккаунт добавлен"); }
@@ -784,6 +808,7 @@ document.addEventListener("change", e => {
   if (t.id === "pf-variants") ui.pfVariants = t.checked;
   if (t.id === "r-enabled") act("/api/radar/settings", {enabled: t.checked});
   if (t.id === "r-mailing") act("/api/radar/settings", {watch_mailing: t.checked});
+  if (t.id === "lg-country") ui.country = COUNTRIES.findIndex(c => c[2] === t.value);
 });
 document.addEventListener("input", e => {
   const id = e.target.id;
