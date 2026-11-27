@@ -402,6 +402,9 @@ def make_app(ctx: dict) -> web.Application:
         for key in ("niches", "langs", "watch_folders", "notify"):
             if key in b and isinstance(b[key], list):
                 cfg[key] = [str(x) for x in b[key]][:50]
+        if isinstance(b.get("folder_rules"), dict):
+            cfg["folder_rules"] = {str(k): [str(x) for x in v][:20] for k, v in b["folder_rules"].items()
+                                   if isinstance(v, list)}
         if "watch_mailing" in b:
             cfg["watch_mailing"] = bool(b["watch_mailing"])
         if "poll_min" in b:

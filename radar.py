@@ -61,6 +61,8 @@ class Rules:
             self.niche_names["custom"] = "Свои слова"
             self.niches["custom"] = _rx(extra_words)
         self.exclude = _rx(r["exclude"])
+        self.exclude_jobseeker = _rx(r.get("exclude_jobseeker", []))
+        self.employer = _rx(r.get("employer", []))
         self.budget = _rx(r["budget"])
         self.urgent = _rx(r["urgent"])
 
@@ -72,6 +74,9 @@ class Rules:
             return None
         if self.exclude and self.exclude.search(t):
             return None
+        # фразы соискателей («ищу работу») — мусор для всех ниш, КРОМЕ ниши «Ищут работу»
+        if "jobs" not in niches and self.exclude_jobseeker and self.exclude_jobseeker.search(t):
+            return None
         lang = intent = None
         for code, rx in self.intent.items():
             if code in langs and rx:
@@ -81,13 +86,17 @@ class Rules:
                     break
         if not lang:
             return None
+        prio = {"jobs": 1}  # «ищу работу» — сильный сигнал соискателя, выигрывает при равенстве слов
         best = None
         for nid, rx in self.niches.items():
             if (nid not in niches and nid != "custom") or not rx:
                 continue
             found = {m.group(1) for m in rx.finditer(t)}
-            if found and (best is None or len(found) > len(best[1])):
-                best = (nid, found)
+            if not found:
+                continue
+            rank = (len(found), prio.get(nid, 0))
+            if best is None or rank > best[2]:
+                best = (nid, found, rank)
         if not best:
             return None
 
@@ -111,6 +120,10 @@ class Rules:
         if sum(1 for ch in text if ord(ch) >= 0x1F300) > 6:
             score -= 15
             reasons.append("много эмодзи")
+        # в нише «Ищут работу» занижаем явные вакансии от работодателей
+        if best[0] == "jobs" and self.employer and self.employer.search(t):
+            score -= 30
+            reasons.append("похоже на вакансию работодателя")
         score = max(0, min(100, score))
         temp = next(name for name, lo in TEMPS if score >= lo)
         return {"niche": best[0], "lang": lang, "score": score, "temp": temp,
@@ -198,8 +211,15 @@ class Radar:
                 self._last_save = time.time()
                 self.db.save()
 
+    def niches_for(self, folder: str | None) -> list[str]:
+        """Ниши для конкретной папки: своё правило, если задано, иначе общий набор."""
+        rules = self.cfg.get("folder_rules", {})
+        if folder and folder in rules and rules[folder]:
+            return rules[folder]
+        return self.cfg["niches"]
+
     # ---------- обработка сообщения ----------
-    async def process(self, chat_id, chat_title, chat_username, msg, sender) -> dict | None:
+    async def process(self, chat_id, chat_title, chat_username, msg, sender, niches=None) -> dict | None:
         key = (chat_id, msg.id)
         if key in self._seen_set:
             return None
@@ -214,7 +234,7 @@ class Radar:
             return None
         text = msg.message or ""
         cfg = self.cfg
-        res = self.rules.analyze(text, cfg["niches"], cfg["langs"])
+        res = self.rules.analyze(text, niches if niches is not None else cfg["niches"], cfg["langs"])
         if not res or res["score"] < MIN_SCORE:
             return None
 
@@ -269,13 +289,15 @@ class Radar:
         if cfg.get("watch_mailing", True):
             for c in d["chats"]:
                 if c.get("enabled", True):
-                    out.append({"link": c["link"], "title": c.get("title")})
+                    out.append({"link": c["link"], "title": c.get("title"), "niches": None})  # общий набор
         folders = set(cfg.get("watch_folders", []))
         if folders:
             for p in d["parsed"]:
-                if (p.get("topic") or "Без темы") in folders or "*" in folders:
+                topic = p.get("topic") or "Без темы"
+                if topic in folders or "*" in folders:
                     out.append({"link": p["link"], "title": p.get("title"), "cid": p.get("cid"),
-                                "ah": p.get("ah"), "acc": p.get("acc") or first_acc})
+                                "ah": p.get("ah"), "acc": p.get("acc") or first_acc,
+                                "niches": self.niches_for(topic)})
         res = []
         for t in out:
             k = t["link"].lower()
@@ -331,7 +353,7 @@ class Radar:
                             continue
                         sender = await m.get_sender()
                         await self.process(st.get("cid") or getattr(peer, "channel_id", 0),
-                                           t.get("title") or "", t["link"][1:], m, sender)
+                                           t.get("title") or "", t["link"][1:], m, sender, niches=t.get("niches"))
                     if msgs:
                         st["last_id"] = max(st.get("last_id", 0), max(m.id for m in msgs))
                     st["bad"] = 0

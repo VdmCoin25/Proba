@@ -40,7 +40,7 @@ DEFAULTS = {
     "radar": {                # настройки радара клиентов
         "enabled": False, "niches": ["ads", "dev", "de_help"],
         "langs": ["ru", "uk", "en", "de", "es", "pt", "fr", "it", "pl"],
-        "watch_mailing": True, "watch_folders": [], "poll_min": 15, "max_chats": 600,
+        "watch_mailing": True, "watch_folders": [], "folder_rules": {}, "poll_min": 15, "max_chats": 600,
         "notify": ["hot"], "custom_words": "",
     },
     "radar_state": {},        # по чатам: аккаунт, access_hash, последний прочитанный id

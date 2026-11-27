@@ -222,13 +222,22 @@ const views = {
         <h2 style="margin:14px 0 8px">Языки</h2>
         <div class="chips" style="flex-wrap:wrap">${Object.entries(LANGS).map(([k, n]) =>
           `<button class="chip ${cfg.langs.includes(k) ? "on" : ""}" data-rlang="${k}">${n}</button>`).join("")}</div>
-        <h2 style="margin:14px 0 8px">Где слушать</h2>
-        <p class="hint small" style="margin:0 2px 8px">Чаты, где состоят ваши аккаунты, слушаются всегда и мгновенно. Публичные группы ниже бот читает без вступления раз в ${cfg.poll_min} мин.</p>
-        <div class="row between" style="margin-bottom:10px"><span class="small">Чаты для рассылок</span>
+        <h2 style="margin:14px 0 8px">Где слушать и что искать</h2>
+        <p class="hint small" style="margin:0 2px 8px">Чаты, где состоят ваши аккаунты, слушаются всегда по нишам сверху. Для каждой папки парса можно задать свои ниши — например, в немецких группах искать только «Ищут работу».</p>
+        <div class="row between" style="margin-bottom:10px"><span class="small">Чаты для рассылок (ниши сверху)</span>
           <label class="switch"><input type="checkbox" id="r-mailing" ${cfg.watch_mailing ? "checked" : ""}><span></span></label></div>
-        <div class="chips" style="flex-wrap:wrap">${R.folders.length ? R.folders.map(f =>
-          `<button class="chip ${cfg.watch_folders.includes(f) ? "on" : ""}" data-rfolder="${esc(f)}">📁 ${esc(f)}</button>`).join("")
-          : `<span class="hint small">Папок парса пока нет</span>`}</div>
+        ${R.folders.length ? R.folders.map(f => {
+          const on = cfg.watch_folders.includes(f);
+          const own = (cfg.folder_rules || {})[f] || [];
+          return `<div class="card" style="background:var(--bg); padding:10px 12px; margin-bottom:8px">
+            <div class="row between"><span class="grow ellipsis small">📁 ${esc(f)}</span>
+              <label class="switch"><input type="checkbox" data-rfoldersw="${esc(f)}" ${on ? "checked" : ""}><span></span></label></div>
+            ${on ? `<div class="chips" style="flex-wrap:wrap; margin-top:8px">
+              <button class="chip ${!own.length ? "on" : ""}" data-rfn="${esc(f)}" data-fn="">Как сверху</button>
+              ${Object.entries(R.niche_names).filter(([k]) => k !== "custom").map(([k, n]) =>
+                `<button class="chip ${own.includes(k) ? "on" : ""}" data-rfn="${esc(f)}" data-fn="${k}">${esc(n)}</button>`).join("")}</div>` : ""}
+          </div>`;
+        }).join("") : `<span class="hint small">Папок парса пока нет</span>`}
         <label class="field" style="margin-top:14px"><span>Как часто читать группы, минут</span>
           <input id="r-poll" type="number" inputmode="numeric" value="${cfg.poll_min}"></label>
         <h2 style="margin:4px 0 8px">Уведомлять в бота</h2>
@@ -656,11 +665,18 @@ document.addEventListener("click", async e => {
     return;
   }
   if ("ropen" in d) { ui.radarOpen = !ui.radarOpen; ui.rdraft = null; render(); return; }
-  if (d.rniche || d.rlang || d.rfolder || d.rnotify !== undefined) {
+  if (d.rfn !== undefined) {                 // ниши конкретной папки
+    const cfg = S.radar.cfg, fr = {...(cfg.folder_rules || {})}, f = d.rfn, k = d.fn;
+    let arr = fr[f] ? [...fr[f]] : [];
+    arr = !k ? [] : (arr.includes(k) ? arr.filter(x => x !== k) : [...arr, k]);
+    fr[f] = arr;
+    return act("/api/radar/settings", {folder_rules: fr});
+  }
+  if (d.rniche || d.rlang || d.rnotify !== undefined) {
     const cfg = S.radar.cfg;
     const toggle = (arr, v) => arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
     const body = d.rniche ? {niches: toggle(cfg.niches, d.rniche)} : d.rlang ? {langs: toggle(cfg.langs, d.rlang)}
-      : d.rfolder ? {watch_folders: toggle(cfg.watch_folders, d.rfolder)} : {notify: d.rnotify ? d.rnotify.split(",") : []};
+      : {notify: d.rnotify ? d.rnotify.split(",") : []};
     return act("/api/radar/settings", body);
   }
   if ("rsave" in d) {
@@ -851,6 +867,8 @@ document.addEventListener("change", e => {
     return optSwitch(t, "/api/posts/update", {id: d.posttoggle, action: t.checked ? "enable" : "disable"}, v => { if (p) p.enabled = v; }); }
   if (t.id === "r-enabled") return optSwitch(t, "/api/radar/settings", {enabled: t.checked}, v => { S.radar.cfg.enabled = v; });
   if (t.id === "r-mailing") return optSwitch(t, "/api/radar/settings", {watch_mailing: t.checked}, v => { S.radar.cfg.watch_mailing = v; });
+  if (d.rfoldersw) { const f = d.rfoldersw, cfg = S.radar.cfg, has = cfg.watch_folders.includes(f);
+    return act("/api/radar/settings", {watch_folders: has ? cfg.watch_folders.filter(x => x !== f) : [...cfg.watch_folders, f]}); }
   if (d.sel) { t.checked ? ui.selected.add(d.sel) : ui.selected.delete(d.sel); render(); }
   if (t.id === "parse-hide") { ui.parseHideAdded = t.checked; ui.selected.clear(); render(); }
   if (t.id === "pf-variants") ui.pfVariants = t.checked;
