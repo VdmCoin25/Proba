@@ -23,7 +23,7 @@ APP_HTML = Path(__file__).with_name("app.html")
 CURRENT_REQ: contextvars.ContextVar = contextvars.ContextVar("current_req")
 
 
-def check_init_data(init_data: str, token: str, admin_id: int) -> bool:
+def check_init_data(init_data: str, token: str, allowed) -> bool:
     try:
         pairs = dict(parse_qsl(init_data, keep_blank_values=True, strict_parsing=True))
     except ValueError:
@@ -39,7 +39,8 @@ def check_init_data(init_data: str, token: str, admin_id: int) -> bool:
     if time.time() - int(pairs.get("auth_date", 0)) > 7 * 86400:
         return False
     try:
-        return json.loads(pairs.get("user", "{}")).get("id") == admin_id
+        uid = json.loads(pairs.get("user", "{}")).get("id")
+        return uid in allowed if not callable(allowed) else allowed(uid)
     except ValueError:
         return False
 
@@ -51,6 +52,14 @@ def load_sections(base: str = "de") -> list[dict]:
     """Готовые темы с ключевыми словами из выбранной базы."""
     path = Path(__file__).with_name(BASES.get(base, BASES["de"]))
     return json.loads(path.read_text("utf-8")) if path.exists() else []
+
+
+def caller_id(request) -> int | None:
+    try:
+        pairs = dict(parse_qsl(request.headers.get("X-Init-Data", ""), keep_blank_values=True))
+        return json.loads(pairs.get("user", "{}")).get("id")
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def radar_summary(ctx: dict) -> dict:
@@ -114,7 +123,8 @@ def make_app(ctx: dict) -> web.Application:
     @web.middleware
     async def auth(request: web.Request, handler):
         if request.path.startswith("/api/"):
-            if not check_init_data(request.headers.get("X-Init-Data", ""), ctx["token"], ctx["admin_id"]):
+            allowed = {ctx["admin_id"], *(int(x) for x in ctx["db"].data.get("admins", []))} if ctx.get("db") else {ctx["admin_id"]}
+            if not check_init_data(request.headers.get("X-Init-Data", ""), ctx["token"], allowed):
                 return web.json_response({"error": "Нет доступа. Откройте панель из своего бота."}, status=401)
             if not ctx.get("ready"):
                 return web.json_response({"error": "Бот ещё запускается, подождите минуту."}, status=503)
@@ -314,6 +324,36 @@ def make_app(ctx: dict) -> web.Application:
             d["parse_rejected"] = []
         ctx["db"].save()
         return ok()
+
+    # ----- команда (доступ к боту) -----
+    @routes.get("/api/team")
+    async def team(request):
+        d = ctx["db"].data
+        return web.json_response({"owner": ctx["admin_id"], "is_owner": caller_id(request) == ctx["admin_id"],
+                                  "admins": d.get("admins", []), "requests": d.get("access_requests", [])})
+
+    @routes.post("/api/team/update")
+    async def team_update(request):
+        if caller_id(request) != ctx["admin_id"]:
+            raise LoginError("Управлять доступом может только владелец бота.")
+        b = await body(request)
+        action, uid = b.get("action"), int(b.get("id", 0))
+        d = ctx["db"].data
+        d["access_requests"] = [r for r in d["access_requests"] if r["id"] != uid]
+        if action == "grant":
+            if uid and uid not in d["admins"]:
+                d["admins"].append(uid)
+            ctx["admins_set"].add(uid)
+            try:
+                await ctx["bot"].send_message(uid, "✅ Вам выдан доступ к боту. Нажмите /start.")
+            except Exception:  # noqa: BLE001
+                pass
+        elif action == "remove":
+            d["admins"] = [x for x in d["admins"] if x != uid]
+            ctx["admins_set"].discard(uid)
+        ctx["db"].save()
+        return web.json_response({"owner": ctx["admin_id"], "is_owner": True,
+                                  "admins": d["admins"], "requests": d["access_requests"]})
 
     # ----- радар и лиды -----
     @routes.get("/api/leads")

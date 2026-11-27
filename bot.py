@@ -9,8 +9,8 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Message,
-                           WebAppInfo)
+from aiogram.types import (BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
+                           MenuButtonWebApp, Message, WebAppInfo)
 from aiohttp import ClientSession
 from dotenv import load_dotenv
 
@@ -26,8 +26,17 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_ID = int(os.environ.get("ADMIN_ID") or 0)
 PUBLIC_URL = (os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("PUBLIC_URL") or "").rstrip("/")
 
+ADMINS: set[int] = {ADMIN_ID}          # владелец + одобренные пользователи (наполняется при старте)
+
+
+def is_admin(uid: int | None) -> bool:
+    return uid is not None and uid in ADMINS
+
+
 router = Router()
-router.message.filter(F.from_user.id == ADMIN_ID)  # бот слушается только вас
+router.message.filter(lambda m: is_admin(m.from_user.id if m.from_user else None))  # только свои
+
+guest = Router()                        # всё, что не прошло фильтр выше, — заявки на доступ
 
 
 class S(StatesGroup):
@@ -133,13 +142,67 @@ async def keep_alive() -> None:
                 logging.warning("keep-alive failed: %s", e)
 
 
+def _guest_name(u) -> str:
+    return " ".join(filter(None, [getattr(u, "first_name", None), getattr(u, "last_name", None)])) or "без имени"
+
+
+@guest.message()
+async def guest_message(m: Message, db: Storage, bot: Bot):
+    """Сообщение от постороннего — регистрируем заявку на доступ и уведомляем владельца один раз."""
+    u = m.from_user
+    if u is None or u.is_bot or is_admin(u.id):
+        return
+    reqs = db.data["access_requests"]
+    if any(r["id"] == u.id for r in reqs):
+        await m.answer("Ваш запрос на доступ уже отправлен. Дождитесь подтверждения владельца.")
+        return
+    reqs.append({"id": u.id, "name": _guest_name(u), "username": u.username, "ts": int(time.time())})
+    db.save()
+    who = f"@{u.username}" if u.username else _guest_name(u)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Выдать доступ", callback_data=f"grant:{u.id}"),
+        InlineKeyboardButton(text="🚫 Отклонить", callback_data=f"deny:{u.id}")]])
+    await bot.send_message(ADMIN_ID, f"👤 Запрос на доступ к боту\n{who} · ID {u.id}\n\nСообщение: {(m.text or '')[:200]}",
+                           reply_markup=kb)
+    await m.answer("Запрос на доступ отправлен владельцу бота. Дождитесь подтверждения.")
+
+
+@router.callback_query(F.data.regexp(r"^(grant|deny):\d+$"))
+async def on_access_decision(cb: CallbackQuery, db: Storage, bot: Bot):
+    if cb.from_user.id != ADMIN_ID:            # выдавать доступ может только владелец
+        await cb.answer("Только владелец бота может выдавать доступ.", show_alert=True)
+        return
+    action, sid = cb.data.split(":")
+    uid = int(sid)
+    reqs = db.data["access_requests"]
+    req = next((r for r in reqs if r["id"] == uid), None)
+    db.data["access_requests"] = [r for r in reqs if r["id"] != uid]
+    who = (f"@{req['username']}" if req and req.get("username") else (req or {}).get("name", f"ID {uid}"))
+    if action == "grant":
+        if uid not in db.data["admins"]:
+            db.data["admins"].append(uid)
+        ADMINS.add(uid)
+        db.save()
+        await cb.message.edit_text(f"✅ Доступ выдан: {who} (ID {uid})")
+        try:
+            await bot.send_message(uid, "✅ Вам выдан доступ к боту. Откройте его заново или нажмите /start.",
+                                   reply_markup=app_keyboard())
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        db.save()
+        await cb.message.edit_text(f"🚫 Отклонено: {who} (ID {uid})")
+    await cb.answer()
+
+
 async def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     bot = Bot(BOT_TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
+    dp.include_router(guest)
     ctx: dict = {"bot": bot, "dp": dp, "admin_id": ADMIN_ID, "token": BOT_TOKEN, "post_state": S.post,
-                 "post_prompt": POST_PROMPT}
+                 "post_prompt": POST_PROMPT, "admins_set": ADMINS}
     await start_web_server(ctx)  # Render ждёт открытый порт
 
     if not ADMIN_ID or not API_ID or not API_HASH:
@@ -156,6 +219,7 @@ async def main():
 
     db = Storage()
     restored = await db.restore(bot, ADMIN_ID)
+    ADMINS.update(int(x) for x in db.data.get("admins", []))  # вернуть ранее одобренных
     pool = AccountPool(API_ID, API_HASH, db)
     report = await pool.load()
 

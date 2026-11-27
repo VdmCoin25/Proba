@@ -134,7 +134,7 @@ const COUNTRIES = [
 ];
 let S = null;              // последнее состояние с сервера
 let tab = "home";
-let ui = { country: 0, leads: null, leadsCount: 0, lf: {status: "new", temp: "", niche: "", lang: ""}, radarOpen: false, expanded: new Set(), tick: 0, chatSection: "mailing", parseText: "", parseTopic: "", folder: null, folderList: [], copyText: "", parseFilter: "", parseHideAdded: false, chatFilter: "all", selected: new Set(), editPost: null, newPost: false, addAcc: false, chatAdd: "" };
+let ui = { country: 0, team: null, leads: null, leadsCount: 0, lf: {status: "new", temp: "", niche: "", lang: ""}, radarOpen: false, expanded: new Set(), tick: 0, chatSection: "mailing", parseText: "", parseTopic: "", folder: null, folderList: [], copyText: "", parseFilter: "", parseHideAdded: false, chatFilter: "all", selected: new Set(), editPost: null, newPost: false, addAcc: false, chatAdd: "" };
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -198,6 +198,10 @@ async function loadLeads(draw = true) {
   const p = new URLSearchParams(Object.entries(ui.lf).filter(([, v]) => v));
   try { const r = await api("/api/leads?" + p); ui.leads = r.leads; ui.leadsCount = r.count; } catch (e) { alertBox(e.message); }
   if (draw) render();
+}
+async function loadTeam() {
+  try { ui.team = await api("/api/team"); } catch (_) { ui.team = {owner: 0, is_owner: false, admins: [], requests: []}; }
+  if (tab === "settings") render();
 }
 const TEMP = {hot: ["🔥", "Горячий"], warm: ["🌤", "Тёплый"], cold: ["❄️", "Холодный"]};
 const STATUS = {new: "Новые", contacted: "Написал", client: "Клиенты", ignored: "Архив"};
@@ -574,6 +578,24 @@ const views = {
           <label class="switch"><input id="st-notify" type="checkbox" ${s.notify ? "checked" : ""}><span></span></label></div>
         <button class="block" data-savesettings>Сохранить</button>
       </div>
+      <h2>Команда — доступ к боту</h2>
+      ${ui.team === null ? `<div class="card empty">Загрузка…</div>` : (() => {
+        const t = ui.team;
+        const reqs = t.requests.length ? `<div class="card"><b>Запросы на доступ</b>
+          ${t.requests.map(r => `<div class="row between" style="margin-top:10px; gap:8px">
+            <div class="grow" style="min-width:0"><div class="ellipsis">${r.username ? "@" + esc(r.username) : esc(r.name)}</div><span class="hint small">ID ${r.id}</span></div>
+            ${t.is_owner ? `<button class="sm" data-team="grant" data-id="${r.id}">Выдать</button>
+              <button class="sm danger" data-team="deny" data-id="${r.id}">Нет</button>` : ""}
+          </div>`).join("")}</div>` : "";
+        const list = `<div class="card list">
+          <div class="item"><span class="grow">👑 Владелец</span><span class="hint small">ID ${t.owner}</span></div>
+          ${t.admins.map(id => `<div class="item"><span class="grow">👤 Пользователь</span><span class="hint small">ID ${id}</span>
+            ${t.is_owner ? `<button class="sm danger" data-team="remove" data-id="${id}">Убрать</button>` : ""}</div>`).join("")}
+        </div>`;
+        return reqs + list + `<p class="hint small" style="margin:2px 4px 0">${t.is_owner
+          ? "Чтобы дать доступ новому человеку, попросите его написать боту — здесь появится запрос. У всех с доступом — полное управление ботом и аккаунтами."
+          : "Управлять доступом может только владелец бота."}</p>`;
+      })()}
       <h2>Чтобы аккаунты не банили</h2>
       <div class="card small" style="line-height:1.5">
         • Пишите только в чаты, где реклама разрешена, и соблюдайте их правила.<br>
@@ -612,6 +634,7 @@ document.addEventListener("click", async e => {
   if (d.tab) {
     tab = d.tab; ui.selected.clear(); ui.copyText = ""; render(); window.scrollTo(0, 0);
     if (tab === "leads") loadLeads();
+    if (tab === "settings") loadTeam();
     return;
   }
   if (d.lf) { ui.lf[d.lf] = d.v; ui.leads = null; render(); return loadLeads(); }
@@ -623,6 +646,12 @@ document.addEventListener("click", async e => {
   if ("lclear" in d) {
     if (!(await confirmBox("Удалить все лиды из архива?"))) return;
     await act("/api/leads/update", {action: "clear_ignored"}); return loadLeads();
+  }
+  if (d.team) {
+    if (d.team === "remove" && !(await confirmBox("Убрать доступ у этого пользователя?"))) return;
+    try { ui.team = await api("/api/team/update", {action: d.team, id: +d.id}); haptic("success"); render(); }
+    catch (err) { alertBox(err.message); }
+    return;
   }
   if ("ropen" in d) { ui.radarOpen = !ui.radarOpen; ui.rdraft = null; render(); return; }
   if (d.rniche || d.rlang || d.rfolder || d.rnotify !== undefined) {

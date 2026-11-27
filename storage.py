@@ -43,7 +43,9 @@ DEFAULTS = {
         "watch_mailing": True, "watch_folders": [], "poll_min": 15, "max_chats": 600,
         "notify": ["hot"], "custom_words": "",
     },
-    "radar_state": {},        # по чатам: аккаунт, access_hash, последний прочитанный id             # найденные парсом группы: [{"link", "title", "members", "query", "ts"}]
+    "radar_state": {},        # по чатам: аккаунт, access_hash, последний прочитанный id
+    "admins": [],             # доп. пользователи с доступом к боту (кроме владельца из ADMIN_ID)
+    "access_requests": [],    # заявки на доступ: [{id, name, username, ts}]             # найденные парсом группы: [{"link", "title", "members", "query", "ts"}]
 }
 
 
