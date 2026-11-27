@@ -149,7 +149,8 @@ class AccountPool:
             mt = re.search(r"(?<!\d)(\d[\d \-]{3,6}\d)(?!\d)", text)
             code = re.sub(r"\D", "", mt.group(1)) if mt else None
             age = int(time.time() - m.date.timestamp()) if m.date else None
-            return {"ok": True, "code": code, "text": text[:400], "age": age}
+            return {"ok": True, "code": code, "text": text[:400], "age": age,
+                    "fresh": age is not None and age < 300}
         return {"ok": True, "code": None, "text": "",
                 "note": "Новых кодов нет. Запросите вход на другом устройстве, затем нажмите снова."}
 

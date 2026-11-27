@@ -340,6 +340,7 @@ const views = {
           <button class="sm ghost" data-acc="${a.enabled ? "disable" : "enable"}" data-name="${esc(a.name)}">${a.enabled ? "Выключить" : "Включить"}</button>
           <button class="sm ghost" data-code="${esc(a.name)}">🔑 Код для входа</button>
           <button class="sm ghost" data-joinone="${esc(a.name)}" ${S.busy ? "disabled" : ""}>Вступить в чаты</button>
+          <button class="sm ghost" data-code="${esc(a.name)}">🔑 Код входа</button>
           ${a.pause ? `<button class="sm ghost" data-acc="unpause" data-name="${esc(a.name)}">Снять паузу</button>` : ""}
           <button class="sm danger" data-acc="delete" data-name="${esc(a.name)}">Удалить</button>
         </div></div>`;
@@ -632,6 +633,15 @@ document.addEventListener("click", async e => {
     const r = await act("/api/login", {step: d.login, value: v});
     if (r && r.login_step === "idle") { ui.addAcc = false; render(); alertBox("✅ Аккаунт добавлен"); }
     else { render(); $("#lg-val")?.focus(); }
+    return;
+  }
+  if (d.code) {
+    try {
+      const r = await api("/api/accounts/code", {name: d.code});
+      if (!r.code) { alertBox(r.note || "Новых кодов нет. Запросите вход на нужном устройстве, затем нажмите снова."); return; }
+      const when = r.fresh ? "только что" : (r.age != null ? Math.floor(r.age / 60) + " мин назад" : "");
+      alertBox(`Код входа: ${r.code}${when ? "  (" + when + ")" : ""}` + (r.fresh ? "" : "\n\n⚠️ Код не свежий. Если вход запрашивали только что — подождите секунду и нажмите ещё раз."));
+    } catch (err) { alertBox(err.message); }
     return;
   }
   if (d.acc) {
