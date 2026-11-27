@@ -53,6 +53,7 @@
   .pill.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
   .pill.off { background: color-mix(in srgb, var(--hint) 15%, transparent); color: var(--hint); }
   .pill.bad { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+  .pill.warm { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
   .pill.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
   .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
@@ -85,6 +86,16 @@
   nav button .ico { font-size: 21px; line-height: 1; filter: grayscale(1); opacity: .7; }
   nav button.on { color: var(--link); }
   nav button.on .ico { filter: none; opacity: 1; }
+  nav button { position: relative; font-size: 10.5px; }
+  .badge { position: absolute; top: 2px; left: 54%; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+    background: var(--danger); color: #fff; font: 600 10px/16px -apple-system, sans-serif; font-style: normal; }
+  .lead-text { white-space: pre-wrap; word-break: break-word; font-size: 14px; margin: 8px 0; }
+  .lead-text.clamp { max-height: 110px; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); }
+  .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; padding: 6px 11px; border-radius: 99px; font-size: 13px; font-weight: 500;
+    background: var(--card); color: var(--text); border: 1px solid var(--sep); }
+  .chip.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
   .empty { text-align: center; color: var(--hint); padding: 18px 8px; }
   .post-text { white-space: pre-wrap; word-break: break-word; font-size: 14px; max-height: 140px; overflow: hidden; }
   .toolbar { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
@@ -99,6 +110,7 @@
 
 <nav id="nav">
   <button data-tab="home" class="on"><span class="ico">🏠</span>Главная</button>
+  <button data-tab="leads"><span class="ico">🎯</span>Лиды<i id="leads-badge" class="badge hidden"></i></button>
   <button data-tab="accounts"><span class="ico">👤</span>Аккаунты</button>
   <button data-tab="chats"><span class="ico">💬</span>Чаты</button>
   <button data-tab="posts"><span class="ico">📝</span>Посты</button>
@@ -111,7 +123,7 @@ tg?.ready(); tg?.expand();
 const INIT = tg?.initData || "";
 let S = null;              // последнее состояние с сервера
 let tab = "home";
-let ui = { chatSection: "mailing", parseText: "", parseTopic: "", folder: null, folderList: [], copyText: "", parseFilter: "", parseHideAdded: false, chatFilter: "all", selected: new Set(), editPost: null, newPost: false, addAcc: false, chatAdd: "" };
+let ui = { leads: null, leadsCount: 0, lf: {status: "new", temp: "", niche: "", lang: ""}, radarOpen: false, expanded: new Set(), tick: 0, chatSection: "mailing", parseText: "", parseTopic: "", folder: null, folderList: [], copyText: "", parseFilter: "", parseHideAdded: false, chatFilter: "all", selected: new Set(), editPost: null, newPost: false, addAcc: false, chatAdd: "" };
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -157,7 +169,11 @@ async function refresh() {
     S = await api("/api/state");
     $("#banner").classList.add("hidden");
     const typing = document.activeElement && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName);
-    const editing = tab === "settings" || ui.newPost || ui.editPost || ui.addAcc || S.login_step !== "idle";
+    const editing = tab === "settings" || ui.newPost || ui.editPost || ui.addAcc || S.login_step !== "idle"
+      || (tab === "leads" && ui.radarOpen);
+    const nb = S.radar.new_by_temp.hot + S.radar.new_by_temp.warm, badge = $("#leads-badge");
+    badge.textContent = nb > 99 ? "99+" : nb; badge.classList.toggle("hidden", !nb);
+    if (tab === "leads" && ++ui.tick % 3 === 0 && !typing && !ui.radarOpen) await loadLeads(false);
     if (!typing && (!editing || tab === "home")) render();
   } catch (e) {
     const b = $("#banner");
@@ -166,8 +182,93 @@ async function refresh() {
   }
 }
 
+async function loadLeads(draw = true) {
+  const p = new URLSearchParams(Object.entries(ui.lf).filter(([, v]) => v));
+  try { const r = await api("/api/leads?" + p); ui.leads = r.leads; ui.leadsCount = r.count; } catch (e) { alertBox(e.message); }
+  if (draw) render();
+}
+const TEMP = {hot: ["🔥", "Горячий"], warm: ["🌤", "Тёплый"], cold: ["❄️", "Холодный"]};
+const STATUS = {new: "Новые", contacted: "Написал", client: "Клиенты", ignored: "Архив"};
+const LANGS = {ru: "RU", uk: "UA", en: "EN", de: "DE", es: "ES", pt: "PT", fr: "FR", it: "IT", pl: "PL"};
+
 // ---------- вкладки ----------
 const views = {
+  leads() {
+    const R = S.radar, cfg = R.cfg, st = R.stats || {}, lf = ui.lf;
+    const chip = (key, val, label) => `<button class="chip ${lf[key] === val ? "on" : ""}" data-lf="${key}" data-v="${val}">${label}</button>`;
+    const settings = ui.radarOpen ? `
+      <div class="card">
+        <b>Настройки радара</b>
+        <h2 style="margin:14px 0 8px">Ниши</h2>
+        <div class="chips" style="flex-wrap:wrap">${Object.entries(R.niche_names).filter(([k]) => k !== "custom").map(([k, n]) =>
+          `<button class="chip ${cfg.niches.includes(k) ? "on" : ""}" data-rniche="${k}">${esc(n)}</button>`).join("")}</div>
+        <h2 style="margin:14px 0 8px">Языки</h2>
+        <div class="chips" style="flex-wrap:wrap">${Object.entries(LANGS).map(([k, n]) =>
+          `<button class="chip ${cfg.langs.includes(k) ? "on" : ""}" data-rlang="${k}">${n}</button>`).join("")}</div>
+        <h2 style="margin:14px 0 8px">Где слушать</h2>
+        <p class="hint small" style="margin:0 2px 8px">Чаты, где состоят ваши аккаунты, слушаются всегда и мгновенно. Публичные группы ниже бот читает без вступления раз в ${cfg.poll_min} мин.</p>
+        <div class="row between" style="margin-bottom:10px"><span class="small">Чаты для рассылок</span>
+          <label class="switch"><input type="checkbox" id="r-mailing" ${cfg.watch_mailing ? "checked" : ""}><span></span></label></div>
+        <div class="chips" style="flex-wrap:wrap">${R.folders.length ? R.folders.map(f =>
+          `<button class="chip ${cfg.watch_folders.includes(f) ? "on" : ""}" data-rfolder="${esc(f)}">📁 ${esc(f)}</button>`).join("")
+          : `<span class="hint small">Папок парса пока нет</span>`}</div>
+        <label class="field" style="margin-top:14px"><span>Как часто читать группы, минут</span>
+          <input id="r-poll" type="number" inputmode="numeric" value="${cfg.poll_min}"></label>
+        <h2 style="margin:4px 0 8px">Уведомлять в бота</h2>
+        <div class="seg">
+          <button class="${cfg.notify.join() === "hot" ? "on" : ""}" data-rnotify="hot">🔥</button>
+          <button class="${cfg.notify.join() === "hot,warm" ? "on" : ""}" data-rnotify="hot,warm">🔥 + 🌤</button>
+          <button class="${!cfg.notify.length ? "on" : ""}" data-rnotify="">Не надо</button>
+        </div>
+        <label class="field" style="margin-top:14px"><span>Свои слова-темы (через запятую, начало слова)</span>
+          <textarea id="r-words" style="min-height:70px" placeholder="логотип, дизайн, видеомонтаж">${esc(cfg.custom_words)}</textarea></label>
+        <button class="block" data-rsave>Сохранить</button>
+      </div>` : "";
+    const list = ui.leads === null ? `<div class="card empty">Загрузка…</div>` : ui.leads.length ? ui.leads.map(l => {
+      const a = l.author || {}, who = a.username ? "@" + a.username : (a.name || "автор");
+      const open = ui.expanded.has(l.id);
+      return `<div class="card">
+        <div class="row between">
+          <span class="pill ${l.temp === "hot" ? "bad" : l.temp === "warm" ? "warm" : "off"}">${TEMP[l.temp][0]} ${l.score}</span>
+          <span class="hint small">${esc(R.niche_names[l.niche] || l.niche)} · ${LANGS[l.lang] || l.lang} · ${fmtAgo(l.ts)}</span>
+        </div>
+        <div class="lead-text ${open ? "" : "clamp"}" data-expand="${l.id}">${esc(l.text)}</div>
+        <div class="hint small ellipsis">${esc(who)} · ${l.source === "telegram" ? "в «" + esc(l.chat || "чат") + "»" : esc(l.source)}</div>
+        ${open ? `<div class="hint small" style="margin-top:4px">Почему: ${esc((l.reasons || []).join(" · "))}</div>` : ""}
+        <div class="row" style="margin-top:10px; gap:6px; flex-wrap:wrap">
+          <button class="sm" data-lopen="${esc(l.url)}">💬 Открыть</button>
+          ${a.username ? `<button class="sm ghost" data-lopen="https://t.me/${esc(a.username)}">✉️ Написать</button>` : ""}
+          ${l.status !== "contacted" ? `<button class="sm ghost" data-lst="contacted" data-id="${l.id}">✓ Написал</button>` : ""}
+          ${l.status !== "client" ? `<button class="sm ghost" data-lst="client" data-id="${l.id}">⭐ Клиент</button>` : ""}
+          ${l.status !== "ignored" ? `<button class="sm danger" data-lst="ignored" data-id="${l.id}">Не то</button>`
+                                   : `<button class="sm ghost" data-lst="new" data-id="${l.id}">Вернуть</button>`}
+        </div></div>`;
+    }).join("") : `<div class="card empty">${cfg.enabled ? "Пока пусто — радар слушает чаты, лиды появятся здесь" : "Включите радар, чтобы начать искать клиентов"}</div>`;
+    return `
+      <div class="card">
+        <div class="row between"><b style="font-size:17px">🎯 Радар клиентов</b>
+          <label class="switch"><input type="checkbox" id="r-enabled" ${cfg.enabled ? "checked" : ""}><span></span></label></div>
+        <div class="hint small" style="margin-top:6px">${cfg.enabled
+          ? `Проверено сообщений: ${st.checked || 0} · групп в опросе: ${st.cycle_chats || 0}${st.cycle_ts ? " · круг " + fmtTime(st.cycle_ts) : ""}`
+          : "Выключен. Ищет в чатах сообщения, где люди ищут рекламу, ботов, сайты, помощь с документами — на 9 языках."}</div>
+        <div class="stats" style="grid-template-columns:repeat(3,1fr); margin-top:12px">
+          <div class="stat" style="background:var(--bg)"><b>${R.new_by_temp.hot}</b><span class="hint small">🔥 новых</span></div>
+          <div class="stat" style="background:var(--bg)"><b>${R.new_by_temp.warm}</b><span class="hint small">🌤 новых</span></div>
+          <div class="stat" style="background:var(--bg)"><b>${R.by_status.client || 0}</b><span class="hint small">⭐ клиентов</span></div>
+        </div>
+        <button class="block ghost" data-ropen style="margin-top:12px">${ui.radarOpen ? "Скрыть настройки" : "⚙️ Настройки радара"}</button>
+      </div>
+      ${settings}
+      <div class="seg" style="margin:4px 0 8px">${Object.entries(STATUS).map(([k, n]) =>
+        `<button class="${lf.status === k ? "on" : ""}" data-lf="status" data-v="${k}">${n} ${R.by_status[k] || 0}</button>`).join("")}</div>
+      <div class="chips" style="margin-bottom:8px">${chip("temp", "", "Все")}${chip("temp", "hot", "🔥 Горячие")}${chip("temp", "warm", "🌤 Тёплые")}${chip("temp", "cold", "❄️ Холодные")}</div>
+      <div class="chips" style="margin-bottom:12px">${chip("niche", "", "Все ниши")}${Object.entries(R.niche_names).map(([k, n]) => chip("niche", k, esc(n))).join("")}
+        ${chip("lang", "", "Все языки")}${Object.entries(LANGS).map(([k, n]) => chip("lang", k, n)).join("")}</div>
+      ${ui.leadsCount > (ui.leads || []).length ? `<p class="hint small" style="margin:0 4px 8px">Показаны последние ${ui.leads.length} из ${ui.leadsCount}</p>` : ""}
+      ${list}
+      ${lf.status === "ignored" && ui.leads?.length ? `<button class="block danger" data-lclear>Очистить архив</button>` : ""}`;
+  },
+
   home() {
     const st = S.stats || {}, lc = st.last_cycle;
     const p = S.progress;
@@ -477,12 +578,39 @@ function wrapSelection(tag) {
 
 // ---------- обработчики ----------
 document.addEventListener("click", async e => {
+  const ex = e.target.closest("[data-expand]");
+  if (ex) { const id = ex.dataset.expand; ui.expanded.has(id) ? ui.expanded.delete(id) : ui.expanded.add(id); render(); return; }
   const row = e.target.closest("[data-folder]");
   if (row) { ui.folder = row.dataset.folder; ui.selected.clear(); ui.copyText = ""; ui.parseFilter = ""; render(); window.scrollTo(0, 0); return; }
   const t = e.target.closest("button, a[data-go], a[data-open]");
   if (!t) return;
   const d = t.dataset;
-  if (d.tab) { tab = d.tab; ui.selected.clear(); ui.copyText = ""; render(); window.scrollTo(0, 0); return; }
+  if (d.tab) {
+    tab = d.tab; ui.selected.clear(); ui.copyText = ""; render(); window.scrollTo(0, 0);
+    if (tab === "leads") loadLeads();
+    return;
+  }
+  if (d.lf) { ui.lf[d.lf] = d.v; ui.leads = null; render(); return loadLeads(); }
+  if (d.lopen) { tg?.openTelegramLink && d.lopen.startsWith("https://t.me/") ? tg.openTelegramLink(d.lopen) : window.open(d.lopen); return; }
+  if (d.lst) {
+    try { S = await api("/api/leads/update", {ids: [d.id], status: d.lst}); haptic("success"); } catch (err) { return alertBox(err.message); }
+    return loadLeads();
+  }
+  if ("lclear" in d) {
+    if (!(await confirmBox("Удалить все лиды из архива?"))) return;
+    await act("/api/leads/update", {action: "clear_ignored"}); return loadLeads();
+  }
+  if ("ropen" in d) { ui.radarOpen = !ui.radarOpen; ui.rdraft = null; render(); return; }
+  if (d.rniche || d.rlang || d.rfolder || d.rnotify !== undefined) {
+    const cfg = S.radar.cfg;
+    const toggle = (arr, v) => arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
+    const body = d.rniche ? {niches: toggle(cfg.niches, d.rniche)} : d.rlang ? {langs: toggle(cfg.langs, d.rlang)}
+      : d.rfolder ? {watch_folders: toggle(cfg.watch_folders, d.rfolder)} : {notify: d.rnotify ? d.rnotify.split(",") : []};
+    return act("/api/radar/settings", body);
+  }
+  if ("rsave" in d) {
+    return act("/api/radar/settings", {poll_min: +$("#r-poll").value, custom_words: $("#r-words").value}, "Сохранено");
+  }
   if (d.go) { e.preventDefault(); tab = d.go; render(); return; }
   if (d.run) {
     if (d.run === "stop" && !(await confirmBox("Остановить авто-рассылку?"))) return;
@@ -626,6 +754,8 @@ document.addEventListener("change", e => {
   if (d.sel) { t.checked ? ui.selected.add(d.sel) : ui.selected.delete(d.sel); render(); }
   if (t.id === "parse-hide") { ui.parseHideAdded = t.checked; ui.selected.clear(); render(); }
   if (t.id === "pf-variants") ui.pfVariants = t.checked;
+  if (t.id === "r-enabled") act("/api/radar/settings", {enabled: t.checked});
+  if (t.id === "r-mailing") act("/api/radar/settings", {watch_mailing: t.checked});
 });
 document.addEventListener("input", e => {
   const id = e.target.id;

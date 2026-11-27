@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 from sender import AccountPool, LoginFlow, Mailer, Parser, new_post, parsed_txt
 from storage import DATA_DIR, Storage
+from radar import Radar
 from webapp import start_web_server
 
 load_dotenv()
@@ -189,7 +190,24 @@ async def main():
 
     ctx["send_parsed"] = send_parsed
     parser = Parser(pool, db, mailer.log, on_parse_finish)
-    ctx.update(db=db, pool=pool, mailer=mailer, login=login, parser=parser, ready=True)
+
+    temp_icon = {"hot": "🔥", "warm": "🌤", "cold": "❄️"}
+
+    async def notify_lead(lead: dict) -> None:
+        """Карточка лида в чат с ботом с кнопками «Открыть сообщение» и «Написать»."""
+        a = lead.get("author") or {}
+        who = f"@{a['username']}" if a.get("username") else (a.get("name") or "автор")
+        niche = radar.rules.niche_names.get(lead["niche"], lead["niche"])
+        text = (f"{temp_icon[lead['temp']]} Лид {lead['score']}/100 · {niche} · {lead['lang'].upper()}\n"
+                f"{who} в «{lead.get('chat') or '—'}»\n\n{lead['text'][:700]}")
+        rows = [[InlineKeyboardButton(text="💬 Открыть сообщение", url=lead["url"])]]
+        if a.get("username"):
+            rows.append([InlineKeyboardButton(text=f"✉️ Написать {who}", url=f"https://t.me/{a['username']}")])
+        await bot.send_message(ADMIN_ID, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+                               disable_web_page_preview=True)
+
+    radar = Radar(pool, db, mailer.log, notify_lead)
+    ctx.update(db=db, pool=pool, mailer=mailer, login=login, parser=parser, radar=radar, ready=True)
     for line in report:
         mailer.log(line, "info" if line.startswith("✔") else "error")
 
@@ -205,6 +223,7 @@ async def main():
     if db.data.get("running"):
         mailer.start()
     mailer.background(keep_alive())
+    radar.start()
 
     try:
         await dp.start_polling(bot, pool=pool, mailer=mailer, db=db)

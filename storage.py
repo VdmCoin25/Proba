@@ -35,13 +35,23 @@ DEFAULTS = {
     "parse_min_members": 100,  # парс: минимум участников
     "parse_active_days": 90,   # парс: последнее сообщение не старше N дней
     "parse_rejected": [],      # группы, отсеянные парсом (чтобы не проверять повторно)
-    "parsed": [],             # найденные парсом группы: [{"link", "title", "members", "query", "ts"}]
+    "parsed": [],
+    "leads": [],              # воронка клиентов: [{id, source, chat, url, author, text, score, temp, niche, lang, status}]
+    "radar": {                # настройки радара клиентов
+        "enabled": False, "niches": ["ads", "dev", "de_help"],
+        "langs": ["ru", "uk", "en", "de", "es", "pt", "fr", "it", "pl"],
+        "watch_mailing": True, "watch_folders": [], "poll_min": 15, "max_chats": 600,
+        "notify": ["hot"], "custom_words": "",
+    },
+    "radar_state": {},        # по чатам: аккаунт, access_hash, последний прочитанный id             # найденные парсом группы: [{"link", "title", "members", "query", "ts"}]
 }
 
 
 def migrate(data: dict) -> None:
     """Обновляет копию от старой версии бота."""
     data["chats"] = [c if isinstance(c, dict) else {"link": c, "enabled": True} for c in data["chats"]]
+    for k, v in copy.deepcopy(DEFAULTS["radar"]).items():
+        data["radar"].setdefault(k, v)
     uniq, seen = [], set()
     for p in data.get("parsed", []):  # убираем повторы в парсе
         if p["link"].lower() not in seen:

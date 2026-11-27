@@ -42,13 +42,27 @@ def check_init_data(init_data: str, token: str, admin_id: int) -> bool:
         return False
 
 
-BASES = {"de": "keywords.json", "nft": "keywords_nft.json"}
+BASES = {"de": "keywords.json", "nft": "keywords_nft.json", "eu": "keywords_eu.json"}
 
 
 def load_sections(base: str = "de") -> list[dict]:
     """Готовые темы с ключевыми словами из выбранной базы."""
     path = Path(__file__).with_name(BASES.get(base, BASES["de"]))
     return json.loads(path.read_text("utf-8")) if path.exists() else []
+
+
+def radar_summary(ctx: dict) -> dict:
+    d = ctx["db"].data
+    radar = ctx.get("radar")
+    counts = {"hot": 0, "warm": 0, "cold": 0}
+    statuses = {"new": 0, "contacted": 0, "client": 0, "ignored": 0}
+    for l in d["leads"]:
+        statuses[l["status"]] = statuses.get(l["status"], 0) + 1
+        if l["status"] == "new":
+            counts[l["temp"]] += 1
+    return {"cfg": d["radar"], "new_by_temp": counts, "by_status": statuses, "total": len(d["leads"]),
+            "stats": radar.stats if radar else {}, "niche_names": radar.rules.niche_names if radar else {},
+            "folders": sorted({p.get("topic") or "Без темы" for p in d["parsed"]})}
 
 
 def plain(text: str, limit: int = 300) -> str:
@@ -82,6 +96,7 @@ def build_state(ctx: dict) -> dict:
                    "type": p.get("type"), "enabled": p.get("enabled", True)} for p in d["posts"]],
         "login_step": login.step,
         "parsed": d["parsed"],
+        "radar": radar_summary(ctx),
         "parsing": ctx["parser"].progress,
         "logs": list(mailer.logs)[:120],
         "now": int(now),
@@ -255,7 +270,7 @@ def make_app(ctx: dict) -> web.Application:
     @routes.get("/api/keywords")
     async def keywords(request):
         return web.json_response({"sections": load_sections(request.query.get("base", "de")),
-                                  "bases": {"de": "Германия · работа и жильё", "nft": "NFT · подарки · крипта"}})
+                                  "bases": {"de": "Германия · работа и жильё", "nft": "NFT · подарки · крипта", "eu": "Европа · бизнес, фриланс, IT"}})
 
     @routes.post("/api/parsed/export")
     async def parsed_export(request):
@@ -287,6 +302,58 @@ def make_app(ctx: dict) -> web.Application:
         elif action == "clear":
             d["parsed"] = []
             d["parse_rejected"] = []
+        ctx["db"].save()
+        return ok()
+
+    # ----- радар и лиды -----
+    @routes.get("/api/leads")
+    async def leads(request):
+        q = request.query
+        items = ctx["db"].data["leads"]
+        status = q.get("status", "new")
+        if status != "all":
+            items = [l for l in items if l["status"] == status]
+        if q.get("temp") in ("hot", "warm", "cold"):
+            items = [l for l in items if l["temp"] == q["temp"]]
+        if q.get("niche"):
+            items = [l for l in items if l["niche"] == q["niche"]]
+        if q.get("lang"):
+            items = [l for l in items if l["lang"] == q["lang"]]
+        items = sorted(items, key=lambda l: (-l["found"], -l["score"]))
+        return web.json_response({"leads": items[: int(q.get("limit", 100))], "count": len(items)})
+
+    @routes.post("/api/leads/update")
+    async def leads_update(request):
+        b = await body(request)
+        ids, status = set(b.get("ids", [])), b.get("status")
+        d = ctx["db"].data
+        if b.get("action") == "clear_ignored":
+            d["leads"] = [l for l in d["leads"] if l["status"] != "ignored"]
+        elif status in ("new", "contacted", "client", "ignored"):
+            for l in d["leads"]:
+                if l["id"] in ids:
+                    l["status"] = status
+                    l["status_ts"] = int(time.time())
+        ctx["db"].save()
+        return ok()
+
+    @routes.post("/api/radar/settings")
+    async def radar_settings(request):
+        b = await body(request)
+        cfg = ctx["db"].data["radar"]
+        if "enabled" in b:
+            cfg["enabled"] = bool(b["enabled"])
+            ctx["mailer"].log("🎯 Радар клиентов " + ("включён" if cfg["enabled"] else "выключен"))
+        for key in ("niches", "langs", "watch_folders", "notify"):
+            if key in b and isinstance(b[key], list):
+                cfg[key] = [str(x) for x in b[key]][:50]
+        if "watch_mailing" in b:
+            cfg["watch_mailing"] = bool(b["watch_mailing"])
+        if "poll_min" in b:
+            cfg["poll_min"] = max(5, min(240, int(b["poll_min"])))
+        if "custom_words" in b:
+            cfg["custom_words"] = str(b["custom_words"])[:3000]
+            ctx["radar"].reload_rules()
         ctx["db"].save()
         return ok()
 

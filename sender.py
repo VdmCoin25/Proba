@@ -38,6 +38,7 @@ class Account:
     title: str = ""
     busy_until: float = 0.0
     note: str = ""
+    uid: int | None = None
 
     @property
     def available(self) -> bool:
@@ -63,6 +64,11 @@ class AccountPool:
         me = await client.get_me()
         return (f"{me.first_name or ''} " + (f"@{me.username}" if me.username else f"+{me.phone}")).strip()
 
+    @staticmethod
+    async def _uid(client: TelegramClient) -> int | None:
+        me = await client.get_me()  # Telethon кеширует
+        return getattr(me, "id", None)
+
     def is_enabled(self, name: str) -> bool:
         return name not in self.db.data["disabled_accounts"]
 
@@ -78,7 +84,7 @@ class AccountPool:
                     await client.disconnect()
                     continue
                 title = await self._title(client)
-                self.accounts.append(Account(name, client, title))
+                self.accounts.append(Account(name, client, title, uid=await self._uid(client)))
                 report.append(f"✔ {name}: {title}")
             except Exception as e:  # noqa: BLE001
                 report.append(f"✖ {name}: {type(e).__name__}: {e}")
@@ -86,7 +92,7 @@ class AccountPool:
         return report
 
     async def add(self, name: str, client: TelegramClient) -> Account:
-        acc = Account(name, client, await self._title(client))
+        acc = Account(name, client, await self._title(client), uid=await self._uid(client))
         self.accounts.append(acc)
         self.db.data["sessions"][name] = client.session.save()
         self.db.save()
@@ -623,7 +629,7 @@ class Parser:
                         continue
                     entry = {"link": link, "title": ch.title, "members": members, "last_ts": last,
                              "query": q, "topic": topic, "ts": int(time.time()),
-                             "cid": ch.id, "ah": ch.access_hash, "rights_ok": True}
+                             "cid": ch.id, "ah": ch.access_hash, "rights_ok": True, "acc": acc.name}
                     parsed.append(entry)
                     found_now.append(entry)
                     new += 1
