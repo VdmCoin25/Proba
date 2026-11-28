@@ -18,8 +18,9 @@ log = logging.getLogger("unames")
 VOWELS = "aeiou"
 CONS = "bcdfghjklmnprstvwz"
 VALID = re.compile(r"^[a-z][a-z0-9_]{3,30}[a-z0-9]$")
-PREFIXES = ["", "the", "get", "go", "my", "use", "its", "real"]
-SUFFIXES = ["", "hub", "app", "pro", "now", "hq", "team", "chat", "group", "x", "io", "up", "lab", "zone", "world"]
+PREFIXES = ["", "the", "neo", "meta", "astro", "real", "its", "my", "go", "get"]
+SUFFIXES = ["", "way", "verse", "star", "light", "core", "flow", "lab", "labs", "wave", "soul", "mind",
+            "sky", "void", "aura", "space", "world", "zone", "era", "hub", "pro", "x", "io", "hq"]
 
 
 def valid_username(u: str) -> bool:
