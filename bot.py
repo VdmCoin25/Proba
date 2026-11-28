@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from sender import AccountPool, LoginFlow, Mailer, Parser, new_post, parsed_txt
 from storage import DATA_DIR, Storage
 from radar import Radar
+from usernames import UsernameFinder
 from webapp import start_web_server
 
 load_dotenv()
@@ -271,7 +272,8 @@ async def main():
                                disable_web_page_preview=True)
 
     radar = Radar(pool, db, mailer.log, notify_lead)
-    ctx.update(db=db, pool=pool, mailer=mailer, login=login, parser=parser, radar=radar, ready=True)
+    unames = UsernameFinder(pool, db, mailer.log)
+    ctx.update(db=db, pool=pool, mailer=mailer, login=login, parser=parser, radar=radar, unames=unames, ready=True)
     for line in report:
         mailer.log(line, "info" if line.startswith("✔") else "error")
 

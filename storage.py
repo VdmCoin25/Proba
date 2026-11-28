@@ -45,7 +45,8 @@ DEFAULTS = {
     },
     "radar_state": {},        # по чатам: аккаунт, access_hash, последний прочитанный id
     "admins": [],             # доп. пользователи с доступом к боту (кроме владельца из ADMIN_ID)
-    "access_requests": [],    # заявки на доступ: [{id, name, username, ts}]             # найденные парсом группы: [{"link", "title", "members", "query", "ts"}]
+    "access_requests": [],    # заявки на доступ: [{id, name, username, ts}]
+    "usernames": [],          # найденные свободные юзернеймы: [{name, status, ts}]             # найденные парсом группы: [{"link", "title", "members", "query", "ts"}]
 }
 
 

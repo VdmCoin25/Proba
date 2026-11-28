@@ -111,6 +111,9 @@ def build_state(ctx: dict, full_parsed: bool = False) -> dict:
         "parsed": d["parsed"] if full_parsed else [],
         "parsed_count": len(d["parsed"]),
         "radar": radar_summary(ctx),
+        "unames": {"progress": ctx["unames"].progress if ctx.get("unames") else None,
+                   "items": sorted(ctx["db"].data.get("usernames", []), key=lambda u: (u["status"] != "free", len(u["name"]), u["name"]))[:300],
+                   "count": len(ctx["db"].data.get("usernames", []))},
         "parsing": ctx["parser"].progress,
         "logs": list(mailer.logs)[:120],
         "now": int(now),
@@ -259,6 +262,34 @@ def make_app(ctx: dict) -> web.Application:
     @routes.post("/api/join/stop")
     async def join_stop(_):
         ctx["mailer"].stop_join()
+        return ok()
+
+    # ----- поиск юзернеймов -----
+    @routes.post("/api/usernames/scan")
+    async def usernames_scan(request):
+        b = await body(request)
+        f = ctx["unames"]
+        if f.busy:
+            raise LoginError("Поиск уже идёт.")
+        mode = b.get("mode", "short")
+        words = [w for w in re.split(r"[\s,;]+", b.get("words", "")) if w.strip()]
+        length = max(5, min(8, int(b.get("length", 5))))
+        style = b.get("style", "pronounceable")
+        limit = max(10, min(1000, int(b.get("limit", 150))))
+        if mode == "thematic" and not words:
+            raise LoginError("Введите тематические слова латиницей.")
+        ctx["mailer"].background(f.run(mode, words, length, style, limit))
+        return ok()
+
+    @routes.post("/api/usernames/stop")
+    async def usernames_stop(_):
+        ctx["unames"].stop()
+        return ok()
+
+    @routes.post("/api/usernames/clear")
+    async def usernames_clear(_):
+        ctx["db"].data["usernames"] = []
+        ctx["db"].save()
         return ok()
 
     # ----- парс -----
