@@ -45,7 +45,7 @@ def check_init_data(init_data: str, token: str, allowed) -> bool:
         return False
 
 
-BASES = {"de": "keywords.json", "nft": "keywords_nft.json", "eu": "keywords_eu.json"}
+BASES = {"de": "keywords.json", "de2": "keywords_de_cities.json", "nft": "keywords_nft.json", "eu": "keywords_eu.json"}
 
 
 def load_sections(base: str = "de") -> list[dict]:
@@ -326,7 +326,7 @@ def make_app(ctx: dict) -> web.Application:
     @routes.get("/api/keywords")
     async def keywords(request):
         return web.json_response({"sections": load_sections(request.query.get("base", "de")),
-                                  "bases": {"de": "Германия · работа и жильё", "nft": "NFT · подарки · крипта", "eu": "Европа · бизнес, фриланс, IT"}})
+                                  "bases": {"de": "Германия · работа и жильё", "de2": "Германия · по городам (2280 слов)", "nft": "NFT · подарки · крипта", "eu": "Европа · бизнес, фриланс, IT"}})
 
     @routes.post("/api/parsed/export")
     async def parsed_export(request):
